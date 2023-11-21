@@ -1,0 +1,27 @@
+name: CH
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python
+  - numpy
+  - pandas
+  - anndata
+  - plotly
+  - matplotlib
+  - python-kaleido
+  - scikit-learn
+  - statsmodels
+  - tqdm
+  - dill
+  - ipykernel
+  - nbformat
+  - openpyxl
+  - lifelines
+  - ipykernel
+  - scipy
+  - seaborn
+  - pymc
+  - jax
+  - nutpie
+  
