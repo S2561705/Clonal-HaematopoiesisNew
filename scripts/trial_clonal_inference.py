@@ -16,12 +16,25 @@ plot_part(part)
 
 # %%
 %%time
+
+# Non-vectorised code
 part = compute_clonal_models_prob(part)
 part = refine_optimal_model_posterior(part, 201)
 
 plot_part(part)
 plot_optimal_model(part)
 
+part.uns['model_dict']
+
 # %%
+%%time
+
+# Vectorised
+part = compute_clonal_models_prob_vec(part)
+part = refine_optimal_model_posterior_vec(part, 201)
+
+plot_part(part)
+plot_optimal_model(part)
 
 part.uns['model_dict']
+# %%
