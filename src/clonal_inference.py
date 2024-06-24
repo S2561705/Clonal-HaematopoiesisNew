@@ -341,10 +341,15 @@ def compute_clonal_models_prob_vec (part, s_resolution=50):
 
     # Compute all possible clonal structures (or partition sets) 
     n_mutations = part.shape[0]
+    compute_invalid_combinations(part)
     a = partition(list(range(n_mutations)))
     part.uns['model_dict'] = {}    
 
-    cs_list = [cs for cs in a]
+    cs_list = [cs for cs in a 
+               if len([i for i in cs 
+                       if i in part.uns['invalid_combinations']]) >0]
+    # cs_list = [cs for cs in cs_list if len(cs)<5]
+    
     # Compute clonal structure probability
     for i, cs in tqdm(enumerate(cs_list), total=len(cs_list)):  
         deterministic_size, total_cells = compute_deterministic_size(cs, AO, DP, AO.shape[1])
@@ -417,3 +422,15 @@ def refine_optimal_model_posterior_vec(part, s_resolution=100):
     return part
 
 #endregion
+
+def compute_invalid_combinations (part):
+    not_valid_comb = np.argwhere(np.corrcoef(part.X)< 0.2)
+    not_valid_comb = [list(i) for i in not_valid_comb]
+    # Extract unique tuples from list(Order Irrespective)
+    # using list comprehension + set()
+    res = []
+    for i in not_valid_comb:
+        if [i[0], i[1]] and [i[1], i[0]] not in res:
+            res.append(i) 
+    
+    part.uns['invalid_combinations'] = res
