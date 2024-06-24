@@ -40,8 +40,6 @@ cohort = [part for part in cohort if part.uns['warning']==None]
 # Drop MYC participant:
 cohort = [part for part in cohort if 'MYC' not in list(part.obs.PreferredSymbol)]
 
-# %%
-
 # extract clonal structures
 for i, part in enumerate(cohort):
     part.obs['clonal_structure_str'] = part.obs.clonal_structure.astype(str)
@@ -50,7 +48,12 @@ for i, part in enumerate(cohort):
 cs_df = pd.concat([part.obs.groupby('clonal_structure_str').mean(numeric_only=True)
            for part in cohort])
 
-summary = pd.concat([part.obs for part in cohort])
+# %%
+
+gene = 'DNMT3A'
+
+summary = pd.concat([part.obs for part in cohort
+                     if gene in list(part.obs.PreferredSymbol)])
 summary = summary[summary['fitness'].notna()]
 summary['log_fitness'] = np.log(summary.fitness)
 # summary = summary[summary.fitness>0.01]
