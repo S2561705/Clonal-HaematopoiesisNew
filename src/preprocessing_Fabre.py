@@ -13,6 +13,7 @@ participant_list = []
 
 for id in unique_ids:
     slice_data = data[data['participant_id'] == id].copy()
+    slice_data = slice_data.sort_values(by=['PreferredSymbol', 'age'])
     unique_time_points = slice_data.age.unique()
 
     if (len(slice_data)/unique_time_points.shape[0]).is_integer():
@@ -44,5 +45,5 @@ for id in unique_ids:
         participant_list.append(new_ad)
 
 
-with open('../exports/fabre.pk', 'wb') as f:
+with open('../exports/Fabre.pk', 'wb') as f:
     pk.dump(participant_list, f)

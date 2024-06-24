@@ -19,9 +19,11 @@ dependencies:
   - openpyxl
   - lifelines
   - ipykernel
-  - scipy
+  - scipy<1.13
   - seaborn
   - pymc
   - jax
   - nutpie
-  
+  - networkx[default]
+  - pyvis
+  - numba

@@ -8,6 +8,8 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 import jax.scipy.stats as jsp_stats
 import jax.random as jrnd
+from itertools import combinations
+
 
 key = jrnd.PRNGKey(758493)  # Random seed is explicit in JAX
 #region Non vectorised functions
@@ -38,36 +40,52 @@ def compute_deterministic_size(cs, AO, DP, n_mutations):
 def jax_cs_hmm_ll(s, AO, DP, time_points,
                   cs,
                   lamb=1.3):
+    
     N_w = 1e5
     n_mutations = AO.shape[1]
 
     # determine leading mutation for each clone
-    lm = []         
+    leading_mutation_in_cs_idx = []         
     clonal_map = jnp.zeros(n_mutations, dtype=int)
+
+
     for i, cs_idx in enumerate(cs):
+
+        # Sum over time points to find biggest overall mutation (summing over time points)
+        # argamx detects leading mutation
         max_idx = jnp.argmax((AO/DP)[:, cs_idx].sum(axis=0))
-        lm.append(cs_idx[max_idx])
+        leading_mutation_in_cs_idx.append(cs_idx[max_idx])
         clonal_map = clonal_map.at[jnp.array(cs_idx)].set(jnp.repeat(i, len(cs_idx)))
 
     mutation_likelihood = jnp.zeros(n_mutations)
 
-    deterministic_clone_size = jnp.array(-N_w*jnp.sum((AO/DP)[:, lm], axis=1) 
-                                            / (jnp.sum((AO/DP)[:, lm], axis=1)-0.5))
+    deterministic_clone_size = jnp.array(-N_w*jnp.sum((AO/DP)[:, leading_mutation_in_cs_idx], axis=1) 
+                                            / (jnp.sum((AO/DP)[:, leading_mutation_in_cs_idx], axis=1)-0.5))
    
     deterministic_clone_size = jnp.ceil(deterministic_clone_size)
     total_cells = N_w + deterministic_clone_size
 
     deterministic_size = AO/DP*2*total_cells[:, None]
 
+    # Loop through each mutation
     for j in range(n_mutations):
+
         s_clone = s[clonal_map[j]]
-        beta_p_rvs = jrnd.beta(key=key, a=AO[:,j][:, None]+1,
+
+        # Sample hidden Vaf sizes for all time points
+        beta_p_rvs = jrnd.beta(key=key, a=AO[:, j][:, None]+1,
                             b=DP[:,j][:, None]- AO[:,j][:, None] + 1,
                             shape=(AO.shape[0], 1_000))
 
+        # sort sampled vafs  (for integration purposes)
         beta_p_rvs = jnp.sort(beta_p_rvs)
 
+        # Transform VAFs to clone sizes
+
+        # Wild type cells plus other clones
         N_w_cond = (total_cells - deterministic_size[:, j])[:, None]
+
+        # VAF to Size transformation
         x_range = jnp.array(-N_w_cond*beta_p_rvs / (beta_p_rvs-0.5))
         x = jnp.ceil(x_range)
 
@@ -92,6 +110,7 @@ def jax_cs_hmm_ll(s, AO, DP, time_points,
             exp_term = jnp.exp(delta_t[i-1]*s_clone)
             mean = init_size*exp_term
             variance = init_size*(2*lamb + s_clone)*exp_term*(exp_term-1)/s_clone
+            
             # Neg Binom parametrization
             p = mean / variance
             n = jnp.power(mean, 2) / (variance-mean)  
@@ -132,7 +151,7 @@ def single_cs_posterior(part, cs, s_resolution=100):
     s_range = jnp.linspace(0.01,1, s_resolution)
     multi_s_range =  jnp.broadcast_to(s_range, (len(cs), s_resolution)).T
     
-    output = jax.vmap(jax_cs_hmm_ll, in_axes=(0, None, None, None, None, None))(multi_s_range, part.layers['AO'].T, part.layers['DP'].T, part.var.time_points,cs, 1.3)
+    output = jax.vmap(jax_cs_hmm_ll, in_axes=(0, None, None, None, None, None))(multi_s_range, part.layers['AO'].T, part.layers['DP'].T, part.var.time_points, cs, 1.3)
     
     return output, s_range
 
@@ -157,11 +176,21 @@ def compute_clonal_models_prob (part, s_resolution=50):
     return part
 
 def compute_model_likelihood(output, cs, s_range):
-    model_prob = np.zeros(len(cs))
-    for i, out in enumerate(output.T):
-        model_prob[i] = np.trapz(x=s_range, y=out)
+    # initialise clonal probability
+    clonal_prob = np.zeros(len(cs))
 
-    return np.prod(model_prob)
+    s_range_size = s_range.max() - s_range.min()
+    s_prior = 1/s_range_size
+    
+    # Marginalising fitness for every clone to get clonal probability
+    for i, out in enumerate(output.T):
+        clonal_prob[i] = s_prior*np.trapz(x=s_range, y=out)
+
+    # Model probability as product of clonal probabilities
+    # because of independence
+    model_probability = np.prod(clonal_prob)
+
+    return model_probability
 
 def refine_optimal_model_posterior(part, s_resolution=100):
     # Compute finer posterior for optimal model
@@ -169,7 +198,7 @@ def refine_optimal_model_posterior(part, s_resolution=100):
     cs = list(part.uns['model_dict'].values())[0][0]
     output, s_range = single_cs_posterior(part, cs, s_resolution)
     part.uns['optimal_model'] = {'clonal_structure': cs,
-                                'mutation_structure': [list(part.obs.iloc[cs_idx]['PreferredSymbol']) for cs_idx in cs],
+                                'mutation_structure': [list(part.obs.iloc[cs_idx].index) for cs_idx in cs],
                                 'posterior': output,
                                 's_range': s_range}
 
@@ -185,7 +214,7 @@ def refine_optimal_model_posterior(part, s_resolution=100):
         # normalise output
         p/=p.sum()     
         sample_range = np.random.choice(s_range, p=p, size=1_000)
-        fitness_map = np.argmax(p)
+        fitness_map = s_range[np.argmax(p)]
         cfd_int = np.quantile(sample_range, [0.05, 0.95])
 
         fitness[c_idx] = fitness_map
@@ -197,9 +226,13 @@ def refine_optimal_model_posterior(part, s_resolution=100):
     part.obs['fitness_5'] = fitness_5
     part.obs['fitness_95'] = fitness_95
     part.obs['clonal_index'] = clonal_index
+
+
     return part
 
 def plot_optimal_model(part):
+    if part.uns['warning'] is not None:
+        print('WARNING: ' + part.uns['warning'])
     model = part.uns['optimal_model']
     output = model['posterior']
     cs = model['clonal_structure']
@@ -208,10 +241,12 @@ def plot_optimal_model(part):
 
     # normalisation constant
     norm_max = np.max(output, axis=0)
+
     # Plot
     for i in range(len(cs)):
         sns.lineplot(x=s_range, y=output[:, i]/ norm_max[i], label=f'clone {ms[i]}')
-
+    plt.xlabel('Fitness')
+    plt.ylabel('Normalised probability')
     plt.show()
 #endregion
 
@@ -284,6 +319,7 @@ def BD_process_dynamics (s, x_vec, exp_term_vec):
     return p_vec, n_vec
 
 def fitness_specific_computations (s_idx, s_vec, x_vec, exp_term_vec_s, recursive_term_vec, p_y_cond_x_vec, time_points, n_mutations, cs):
+    
     s = s_vec[s_idx]
     exp_term_vec = exp_term_vec_s[s_idx]
 
@@ -328,30 +364,35 @@ def recursive_term_update(j, recursive_term_i, x_i, p_i, n_i, p_y_cond_x_i):
 
     return recursive_term_i
 
-def compute_clonal_models_prob_vec (part, s_resolution=50):
+def compute_clonal_models_prob_vec (part, s_resolution=50,  min_s=0.01, max_s=1, filter_invalid=True, disable_progressbar=False):
     """Compute model probabilities for each clonal structure.
     Append results in unstructued dictionary."""
     
+
     # Extract participant features
     AO = jnp.array(part.layers['AO'].T)
     DP = jnp.array(part.layers['DP'].T)
     time_points = jnp.array(part.var.time_points)
-    jnp.diff(time_points)
-    s_vec = jnp.linspace(0.01, 1, s_resolution)
+    s_vec = jnp.linspace(min_s, max_s, s_resolution)
 
     # Compute all possible clonal structures (or partition sets) 
     n_mutations = part.shape[0]
-    compute_invalid_combinations(part)
-    a = partition(list(range(n_mutations)))
+
+    # initialise model dictionary
     part.uns['model_dict'] = {}    
 
-    cs_list = [cs for cs in a 
-               if len([i for i in cs 
-                       if i in part.uns['invalid_combinations']]) >0]
-    # cs_list = [cs for cs in cs_list if len(cs)<5]
-    
+    cs_list = find_valid_clonal_structures(part, filter_invalid=filter_invalid)
+
+    part.uns['warning'] = None
+    if len(cs_list) > 100:
+        part.uns['warning'] = 'Too many possible structures'
+        
+        # Set only possibility as all mutations inddependent
+        cs_list = [[[i] for i in range(n_mutations)]]
+
     # Compute clonal structure probability
-    for i, cs in tqdm(enumerate(cs_list), total=len(cs_list)):  
+    for i, cs in tqdm(enumerate(cs_list), disable=disable_progressbar,
+                      total=len(cs_list)):  
         deterministic_size, total_cells = compute_deterministic_size(cs, AO, DP, AO.shape[1])
 
         # compute clonal posteriors
@@ -374,7 +415,6 @@ def refine_optimal_model_posterior_vec(part, s_resolution=100):
     # Compute finer posterior for optimal model
     # retrieve optimal clonal structure
     cs = list(part.uns['model_dict'].values())[0][0]
-    n_mutations = part.shape[0]
 
     # Extract participant features
     AO = jnp.array(part.layers['AO'].T)
@@ -391,7 +431,7 @@ def refine_optimal_model_posterior_vec(part, s_resolution=100):
     output = jax_cs_hmm_ll_vec(s_vec, AO, DP, time_points, cs, deterministic_size, total_cells)
 
     part.uns['optimal_model'] = {'clonal_structure': cs,
-                                'mutation_structure': [list(part.obs.iloc[cs_idx]['PreferredSymbol']) for cs_idx in cs],
+                                'mutation_structure': [list(part.obs.iloc[cs_idx].index) for cs_idx in cs],
                                 'posterior': output,
                                 's_range': s_vec}
 
@@ -403,13 +443,23 @@ def refine_optimal_model_posterior_vec(part, s_resolution=100):
 
     for i, c_idx in enumerate(cs):
 
+        # Extract posterior for each clone
         p = np.array(output[:, i])
-        # normalise output
-        p/=p.sum()     
+        if p.sum() == 0:
+            part.uns['warning'] = 'Zero posterior'
+            return part
+        
+        # normalise posterior
+        p/=p.sum()
+
+        # fitness map 
+        fitness_map = s_vec[np.argmax(p)]
+
+        # 95% CI for fitness using bootstrap
         sample_range = np.random.choice(s_vec, p=p, size=1_000)
-        fitness_map = np.argmax(p)
         cfd_int = np.quantile(sample_range, [0.05, 0.95])
 
+        # Append information
         fitness[c_idx] = fitness_map
         fitness_5[c_idx] = cfd_int[0]
         fitness_95[c_idx] = cfd_int[1]
@@ -419,13 +469,39 @@ def refine_optimal_model_posterior_vec(part, s_resolution=100):
     part.obs['fitness_5'] = fitness_5
     part.obs['fitness_95'] = fitness_95
     part.obs['clonal_index'] = clonal_index
+
+
+    # Append mutational structure to each mutation
+    mut_structure = part.uns['optimal_model']['mutation_structure']
+
+    clonal_structure_list = []
+    for mut in part.obs.index:
+        for structure in mut_structure:
+            if mut in structure:
+                clonal_structure_list.append(
+                    structure)
+
+    part.obs['clonal_structure'] = clonal_structure_list
+
     return part
 
 #endregion
 
-def compute_invalid_combinations (part):
-    not_valid_comb = np.argwhere(np.corrcoef(part.X)< 0.2)
+def compute_invalid_combinations (part, pearson_distance_threshold=0.5):
+
+    # Compute pearson of each mutation with with time
+    correlation_matrix = np.corrcoef(
+        np.vstack([part.X, part.var.time_points]))
+    correlation_vec = correlation_matrix[-1, :-1]
+
+    # Compute distance between pearsonr's
+    distance_matrix = np.abs(correlation_vec - correlation_vec[:, None])
+
+    # label invalid combinations if pearson correlation is too different
+    not_valid_comb = np.argwhere(distance_matrix
+                                 >pearson_distance_threshold)
     not_valid_comb = [list(i) for i in not_valid_comb]
+    
     # Extract unique tuples from list(Order Irrespective)
     # using list comprehension + set()
     res = []
@@ -434,3 +510,47 @@ def compute_invalid_combinations (part):
             res.append(i) 
     
     part.uns['invalid_combinations'] = res
+
+def find_valid_clonal_structures(part, p_distance_threshold=1, filter_invalid=True):
+    """
+    Find all valid clonal structures using pearson correlation analysis"""
+
+    n_mutations = part.shape[0]
+
+    if n_mutations == 1:
+        valid_cs = [[[0]]]
+        return valid_cs
+
+    else:
+        if filter_invalid is True:
+            # compute invalid clonal structures using correlation analysis
+            compute_invalid_combinations(part, pearson_distance_threshold=p_distance_threshold)
+            
+        # create list of all possible clonal structures
+        a = partition(list(range(n_mutations)))
+        cs_list = [cs for cs in a]
+
+        if filter_invalid is False:
+            return cs_list
+        
+        else:
+            # find all valid clonal structures
+            valid_cs = []
+
+            for cs in cs_list:
+                invalid_combinations_in_cs = 0
+                for clone in cs:
+                    # compute all pairs of mutations inside clone
+                    mut_comb = list(combinations(clone, 2))
+                    # check if any pair is invalid
+                    n_invalid_comb_in_clone = len(
+                        [comb for comb in mut_comb 
+                            if list(comb) in part.uns['invalid_combinations']])
+
+                    invalid_combinations_in_cs += n_invalid_comb_in_clone
+
+                # append valid clonal structure
+                if invalid_combinations_in_cs == 0:
+                    valid_cs.append(cs)
+                    
+            return valid_cs

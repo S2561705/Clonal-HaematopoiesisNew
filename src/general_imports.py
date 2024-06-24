@@ -8,7 +8,10 @@ from tqdm import tqdm
 
 
 
-def plot_part(part):
-    for i in part:
-       sns.lineplot(x=i.var.time_points, y =i.X.flatten(), label=i.obs.PreferredSymbol.values)
-    plt.show()
+def plot_part(part, cohort=None):
+   for i in part:
+      if cohort == 'Fabre':
+            sns.lineplot(x=i.var.time_points, y =i.X.flatten(), label=i.obs.PreferredSymbol.values)
+      else:
+       sns.lineplot(x=i.var.time_points, y =i.X.flatten(), label=list(i.obs.index))
+   plt.show()
