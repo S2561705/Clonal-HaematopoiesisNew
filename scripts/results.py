@@ -11,22 +11,20 @@ import pickle
 # %%
 
 # Export results
-with open('../exports/Uddin/Uddin_processed_2024_05_17.pk', 'rb') as f:
+with open('../exports/Uddin/Uddin_processed_2024_06_26.pk', 'rb') as f:
     processed_uddin = pk.load(f)
 
 # Export results
 with open('../exports/LBC/merged_cohort_fitted.pk', 'rb') as f:
     processed_lbc = pk.load(f)
 
-processed_uddin[0]
-rename_col_dict = dict({'Gene':'PreferredSymbol',
-                        'Annotation': 'HGVSc',
-                        'Position (hg19)': 'position',
-                        'CHR': 'chromosome',
-                        'REF': 'reference',
-                        'ALT': 'mutation',
-                        'Protein Change': 'p_key',
-                        'fitness':'fitness'})
+rename_col_dict = dict({'Gene.refGene':'PreferredSymbol',
+                        'transcriptOI': 'HGVSc',
+                        'pos': 'position',
+                        'chrom': 'chromosome',
+                        'ref': 'reference',
+                        'alt': 'mutation',
+                        'Gene_protein': 'p_key'})
 
 for part in processed_uddin:
     part.obs = part.obs.rename(columns=rename_col_dict)

@@ -27,3 +27,4 @@ dependencies:
   - networkx[default]
   - pyvis
   - numba
+  - scikit-survival

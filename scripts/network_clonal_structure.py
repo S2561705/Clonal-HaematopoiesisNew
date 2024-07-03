@@ -11,21 +11,22 @@ import ast
 from collections import Counter
 
 # Export results
-with open('../exports/Uddin/Uddin_processed_2024_05_17.pk', 'rb') as f:
+with open('../exports/Uddin/Uddin_processed_2024_06_26.pk', 'rb') as f:
     processed_uddin = pk.load(f)
 
 # Export results
 with open('../exports/LBC/merged_cohort_fitted.pk', 'rb') as f:
     processed_lbc = pk.load(f)
 
-rename_col_dict = dict({'Gene':'PreferredSymbol',
-                        'Annotation': 'HGVSc',
-                        'Position (hg19)': 'position',
-                        'CHR': 'chromosome',
-                        'REF': 'reference',
-                        'ALT': 'mutation',
-                        'Protein Change': 'p_key',
-                        'fitness':'fitness'})
+
+processed_uddin[0].obs
+rename_col_dict = dict({'Gene.refGene':'PreferredSymbol',
+                        'transcriptOI': 'HGVSc',
+                        'pos': 'position',
+                        'chrom': 'chromosome',
+                        'ref': 'reference',
+                        'alt': 'mutation',
+                        'Gene_protein': 'p_key'})
 
 for part in processed_uddin:
     part.obs = part.obs.rename(columns=rename_col_dict)
@@ -128,23 +129,29 @@ for key, v in edge_dict.items():
     print(edge_size_log)
     net.add_edge(key[0], key[1], width=edge_size, color=edge_color_hex) 
 
-net.toggle_physics(True)
+# net.toggle_physics(True)
 # net.show_buttons(filter_=['physics'])
 
 # sns.displot(summary.log_fitness, kde=True)
 # sns.displot([np.log(1+ v[1]) for v in edge_dict.values()], bins=100)
 
 net.set_options("""
-const options = {
-  "physics": {
-    "forceAtlas2Based": {
-      "springLength": 100
-    },
-    "minVelocity": 0.75,
-    "solver": "forceAtlas2Based"
-  }
-}
-""")
+    const options = {
+        "physics": {
+            "forceAtlas2Based": {
+            "centralGravity": 0.02,
+            "springLength": 100,
+            "springConstant": 0.05,
+            "avoidOverlap": 0.5
+            },
+            "minVelocity": 0.75,
+            "solver": "forceAtlas2Based",
+            "wind": {
+      "x": 3.9,
+      "y": 0.8}
+    }
+    }
+    """)
 net.save_graph(name='../results/clonal_structure_graph.html')
 # %%
 
