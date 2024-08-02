@@ -445,7 +445,7 @@ def refine_optimal_model_posterior_vec(part, s_resolution=100):
 
         # Extract posterior for each clone
         p = np.array(output[:, i])
-        if p.sum() == 0:
+        if np.nansum(p).sum() == 0:
             part.uns['warning'] = 'Zero posterior'
             return part
         

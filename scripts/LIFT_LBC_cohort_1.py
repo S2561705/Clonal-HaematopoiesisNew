@@ -6,6 +6,7 @@ from src.clonal_inference import *
 from src.LiFT import *
 from src import distributions
 import pickle
+import pandas as pd
 
 # set random seed
 np.random.seed(123)
@@ -98,7 +99,6 @@ filtered_ns = [part[part.obs.LiFT_value>0.9] for part in participant_ns]
 
 filtered_ns = [part for part in filtered_ns if part.shape[0]>0]
 
-import pandas as pd
 data = pd.read_csv('../data/paper_lift.csv')
 
 mutations = set([mut.key for mut in mut_obj_list_ns 

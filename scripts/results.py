@@ -10,99 +10,179 @@ import plotly.graph_objects as go
 import pickle
 # %%
 
-# Export results
-with open('../exports/Uddin/Uddin_processed_2024_06_26.pk', 'rb') as f:
-    processed_uddin = pk.load(f)
+# Import results
+with open('../exports/WHI/WHI_fitted_1percent.pk', 'rb') as f:
+    processed_WHI = pk.load(f)
 
-# Export results
+# Import results
 with open('../exports/LBC/merged_cohort_fitted.pk', 'rb') as f:
     processed_lbc = pk.load(f)
 
-rename_col_dict = dict({'Gene.refGene':'PreferredSymbol',
-                        'transcriptOI': 'HGVSc',
-                        'pos': 'position',
-                        'chrom': 'chromosome',
-                        'ref': 'reference',
-                        'alt': 'mutation',
-                        'Gene_protein': 'p_key'})
+# Import results
+with open('../exports/sardiNIA/sardiNIA_1percent_fitted.pk', 'rb') as f:
+    processed_sardinia = pk.load(f)
 
-for part in processed_uddin:
-    part.obs = part.obs.rename(columns=rename_col_dict)
+for cohort_name, cohort in zip(['WHI','LBC','sardiNIA'],
+                  [processed_WHI, processed_lbc, processed_sardinia]):
+    for part in cohort:
+        part.obs['Cohort'] = cohort_name
+        part.obs['participant_id'] = part.uns['participant_id']
 
-cohort = processed_uddin + processed_lbc
+cohort = processed_WHI + processed_lbc + processed_sardinia
+# drop participants with warnings
+cohort = [part for part in cohort if part.uns['warning'] is None]
 
-for part in cohort:
-    part.obs['Sample ID'] = part.uns['participant_id']
+# for part in cohort:
+#     part.obs['participant_id'] = part.uns['participant_id']
 
 # %%
 
-summary = pd.concat([part.obs for part in cohort])
+# Find overlapping columns
+overlapping_obs_columns = list(set(processed_WHI[0].obs.columns) 
+                                & set(processed_lbc[0].obs.columns) 
+                                & set(processed_sardinia[0].obs.columns))
+
+summary = pd.concat([part.obs[overlapping_obs_columns] for part in cohort])
 summary = summary[summary['fitness'].notna()]
 summary = summary.sort_values(by='fitness', ascending=False)
 
+summary.to_csv('../results/summary.csv', sep=';')
 
-# plot fitness distribution
-sns.displot(x=summary.fitness, kde=True)
-plt.title('Fitness distribution')
+# %%
+
+fitness_threshold = 0.02
+gene_count_threshold = 1
+
+gene_counts = summary[summary.fitness>fitness_threshold].PreferredSymbol.value_counts()
+gene_keep = gene_counts[gene_counts > gene_count_threshold].index
+
+
+# summary_filtered
+summary_filtered = summary[(summary.fitness>fitness_threshold)
+                            & (summary.PreferredSymbol.isin(gene_keep))]
+
+
+# Sort dataframe by gene mean
+# Step 1: Calculate the mean fitness for each PreferredSymbol
+means = summary_filtered.groupby('PreferredSymbol')['fitness'].mean()
+
+# Step 2: Sort the means
+sorted_means = means.sort_values(ascending=False)
+
+# Step 3: Reorder the categories in PreferredSymbol based on the sorted means
+summary_filtered['PreferredSymbol'] = pd.Categorical(
+    summary_filtered['PreferredSymbol'],
+    categories=sorted_means.index,
+    ordered=True
+)
+
+plt.figure(figsize=(14,6))
+
+# plot boxplot
+sns.boxplot(summary_filtered, x='PreferredSymbol', y='fitness',
+            hue='PreferredSymbol',
+            showfliers='suspectedoutliers',
+            # gap=1,
+            palette = sns.color_palette('deep'))
+
+# Rotate the x-axis labels by 60 degrees
+plt.xticks(rotation=55)
+
+sns.despine()
+# save and show 
+plt.savefig('../results/descriptive/combined_fitness_box.png', dpi=1000)
 plt.show()
-plt.clf()
 
-px.box(summary, x='PreferredSymbol', y='fitness', points='all', hover_data=['Sample ID', 'p_key'])
-px.box(summary[summary.fitness>0.01], x='PreferredSymbol', y='fitness', points='all', hover_data=['Sample ID', 'p_key'])
 
 # %%
-summary_filtered = summary[summary.fitness>0.01]
+new = [part for part in processed_sardinia if part.uns['warning'] is None]
+for part in new:
+    if part.obs.fitness.max()>0.8:
+        break
 
-gene_mean_fitness_dict =(
-    summary_filtered.groupby('PreferredSymbol')['fitness'].mean().to_dict())
+fig, axes = plt.subplots(1, 2, figsize=(10,5))
+for mut in part:
+ sns.lineplot(x=mut.var.time_points,
+    y=mut.X.flatten(),
+    label=mut.obs.p_key,
+    ax=axes[0])
+axes[0].set_ylabel('Age (years)')
+axes[0].set_xlabel('VAF')
 
-gene_mean_fitness_dict = dict(sorted(gene_mean_fitness_dict.items(), key=lambda item: item[1], reverse=True))
+model = part.uns['optimal_model']
+output = model['posterior']
+cs = model['clonal_structure']
+ms = model['mutation_structure']
 
-fig = go.Figure()
-for gene in gene_mean_fitness_dict.keys():
-    summary_gene = summary_filtered[summary_filtered.PreferredSymbol==gene]
-    fig.add_trace(
-        go.Box(
-            x=summary_gene.PreferredSymbol, y=summary_gene.fitness,
-            name=gene, boxpoints='all', hovertext=summary_gene.index
-        )
-    )
-fig.update_xaxes(tickangle=-70)
-fig.show(width=2000)
-fig.write_image('../results/combined_fitness_map.png', width=1000)
+ps = []
+for structure in cs:
+    ps.append([part[i].obs.p_key.values[0] for i in structure])
+
+
+s_range = model['s_range']
+# normalisation constant
+norm_max = np.max(output, axis=0)
+# Plot
+i =1
+
+mut_colors = [sns.color_palette()[0], sns.color_palette()[2]]
+for i in range(len(cs)):
+    label = f'clone {i+1}\n' + '\n'.join(map(str, ps[i]))
+    
+    sns.lineplot(x=s_range,
+    y=output[:, i]/ norm_max[i],
+    label=label,
+    ax=axes[1],
+    color=mut_colors[i])
+    axes[1].set_xlabel('Fitness')
+    axes[1].set_ylabel('Normalised probability')
+
+sns.despine()
+
+axes[0].axhline(y=0.02, color='grey', linestyle='--')
+
+plt.savefig('../results/sample_participant_2.png', dpi=1000)
+
 
 # %%
-# Plot MYC part
-# for part in cohort:
-#     if part.uns['participant_id'] == 'LBC360020':
-#         plot_part(part)
-#         plot_optimal_model(part)
+i = 171
+part = cohort[i]
+fig, axes = plt.subplots(1, 2, figsize=(10,5))
+for mut in part:
+    sns.lineplot(x=mut.var.time_points,
+    y=mut.X.flatten(),
+    label=mut.obs.index,
+    ax=axes[0])
 
-for part in cohort:
-    if 'PPM1D' in list(part.obs.PreferredSymbol):
-        plot_part(part)
-        # print(part.layers['DP'])
-        # print(part.layers['AO'])
-        print(part.uns['participant_id'])
-        # print(part.uns)
+axes[0].set_ylabel('Age (years)')
+axes[0].set_xlabel('VAF')
 
-# %%
-#only genes with 3 mutations
-fig = go.Figure()
-for gene in gene_mean_fitness_dict.keys():
-    summary_gene = summary_filtered[summary_filtered.PreferredSymbol==gene]
-    if len(summary_gene)<2:
-        continue
-    fig.add_trace(
-        go.Box(
-            x=summary_gene.PreferredSymbol, y=summary_gene.fitness,
-            name=gene, boxpoints='all', hovertext=summary_gene.index
-        )
-    )
-fig.update_xaxes(tickangle=-70)
-fig.show(width=2000)
-fig.write_image('../results/combined_fitness_map_morethan2.png', width=1000)
-# %%
+model = part.uns['optimal_model']
+output = model['posterior']
+cs = model['clonal_structure']
+ms = model['mutation_structure']
 
-summary_filtered.to_csv('../results/summary_filtered.csv', sep=';')
-# %%
+ps = []
+for structure in cs:
+    ps.append([part[i].obs.p_key.values[0] for i in structure])
+
+s_range = model['s_range']
+# normalisation constant
+norm_max = np.max(output, axis=0)
+# Plot
+i =1
+for i in range(len(cs)):
+    label = f'clone {i+1}\n' + '\n'.join(map(str, ms[i]))
+    
+    sns.lineplot(x=s_range,
+    y=output[:, i]/ norm_max[i],
+    label=label,
+    ax=axes[1])
+    axes[1].set_xlabel('Fitness')
+    axes[1].set_ylabel('Normalised probability')
+
+sns.despine()
+
+axes[0].axhline(y=0.02, color='grey', linestyle='--')
+
+plt.savefig('../results/sample_participant.png', dpi=1000)

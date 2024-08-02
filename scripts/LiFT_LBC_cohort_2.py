@@ -22,9 +22,6 @@ mut_dict_ns = create_mut_dict(participant_ns)
 # Create priors from synonymous data
 prior_list = fit_artefact_priors(mut_dict_syn)
 
-def plot_prior(prior):
-    sns.lineplot(x=prior[0], y=prior[1])
-plot_prior(prior_list[2])
 # %%
 mut_obj_list_syn = []
 # Artefact model probability

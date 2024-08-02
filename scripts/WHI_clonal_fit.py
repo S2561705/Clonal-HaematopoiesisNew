@@ -5,7 +5,7 @@ from src.clonal_inference import *
 
 import pickle
 
-with open('../exports/Uddin_update.pk', 'rb') as f:
+with open('../exports/WHI/WHI.pk', 'rb') as f:
     participant_list = pk.load(f)
 
 processed_part_list = []
@@ -20,7 +20,7 @@ for i, part in enumerate(participant_list):
     processed_part_list.append(part)
 
 # Export results
-with open('../exports/Uddin/Uddin_processed_2024_06_26.pk', 'wb') as f:
+with open('../exports/WHI/WHI_fitted.pk', 'wb') as f:
     pk.dump(processed_part_list, f)
 
 # %%

@@ -6,18 +6,24 @@ import pickle as pk
 data = pd.read_csv('../data/Uddin/randname.lowfreq.sam.allobs.freeze2021Sep27_commonid_COSMIC_CORRECTED.csv')
 # keep only 
 
-data.columns
 data = data[data['Func.refGene'] == 'exonic']
 # data = data.dropna(axis=1)
 # drop empty columns
 
 # Manipulations
-data = data.rename(columns={'DrawAge': 'age'})
+data = data.rename(columns={'DrawAge': 'age',
+                        'Gene.refGene':'PreferredSymbol',
+                        'transcriptOI': 'HGVSc',
+                        'pos': 'position',
+                        'chrom': 'chromosome',
+                        'ref': 'reference',
+                        'alt': 'mutation'})
+
 
 key_list = []
 for i, row in data.iterrows():
-    key = row['Gene.refGene'] + ' '
-    for ann in row['transcriptOI'].split(':'):
+    key = row['PreferredSymbol'] + ' '
+    for ann in row['HGVSc'].split(':'):
         if 'c.' in ann:
             ann_split = ann.split('.')
             if ann_split[1][0].isdigit():
@@ -30,8 +36,8 @@ for i, row in data.iterrows():
     key_list.append(key)
 data['key'] = key_list
 
-data['Gene_protein'] = data['Gene.refGene'] +' p.' + data['NonsynOI']
-obs_columns = ['key', 'Gene.refGene', 'transcriptOI', 'chrom', 'pos', 'ref', 'alt', 'NonsynOI', 'Gene_protein']
+data['p_key'] = data['PreferredSymbol'] +' p.' + data['NonsynOI']
+obs_columns = ['key', 'PreferredSymbol', 'HGVSc', 'chromosome', 'position', 'reference', 'mutation', 'NonsynOI', 'p_key']
 unique_ids = data['commonid'].unique()
 
 participant_list = []
@@ -87,5 +93,14 @@ for id in unique_ids:
         if new_ad.shape[1] > 1:
             participant_list.append(new_ad)
 
-with open('../exports/Uddin_update.pk', 'wb') as f:
+with open('../exports/WHI/WHI.pk', 'wb') as f:
     pk.dump(participant_list, f)
+
+filtered_1_list = []
+for part in participant_list:
+    keep_idx = np.argwhere(part.X.max(axis=1)>0.01).flatten()
+    if keep_idx.shape[0]>0:
+        filtered_1_list.append(part[keep_idx])
+
+with open('../exports/WHI/WHI_1percent.pk', 'wb') as f:
+    pk.dump(filtered_1_list, f)

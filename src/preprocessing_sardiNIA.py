@@ -4,24 +4,87 @@ import numpy as np
 import pickle as pk
 import json
 
-data_ns = pd.read_csv('../data/LBC/mutation_data/GSE178936_LBC_ARCHER.1PCT_VAF.Feb22.non-synonymous.tsv', sep='\t')
-data_s = pd.read_csv('../data/LBC/mutation_data/GSE178936_LBC_ARCHER.1PCT_VAF.Feb22.synonymous.tsv', sep='\t')
+data_ns = pd.read_csv('../data/sardiNIA/Fabre_CHIP.05Jul24.2PCT_VAF_NON-SYNONYMOUS.tsv', sep='\t')
+data_s = pd.read_csv('../data/sardiNIA/Fabre_CHIP.05Jul24.1PCT_VAF_SYNONYMOUS.tsv', sep='\t')
 
-# Drop participants from study
-# Load excluded participants list
-with open('../resources/excluded_samples.json') as json_file:
-    excluded_samples = json.load(json_file)
 
-# Load participant id map
-with open('../resources/LBC_cohort_1_id_map.pkl', 'rb') as json_file:
-    id_map = pk.load(json_file)
+sardinia_df = pd.read_csv('../data/sardiNIA/fabre_deaths upd 2024.csv')
+sardiNIA_fabre_id_match = pd.read_csv('../data/sardiNIA/sardiNIA_id_match.csv')
 
-inv_id_map ={v: k for k, v in id_map.items()}
-# meta = pd.read_csv('../data/LBC/lbc_meta.csv')
 
-# LBC36 metadata subset
-# meta = meta[meta.cohort == 'LBC36'].copy()
+#create ID dictionary
+ID_PD_map = dict(zip(sardiNIA_fabre_id_match.PD_ID, sardiNIA_fabre_id_match.Sard_ID))
 
+# rename participant_ids
+data_ns = data_ns.rename(columns={'participant_id':'participant_id_PD'})
+
+data_ns['participant_id'] = data_ns['participant_id_PD'].map(ID_PD_map)
+n_phase_dict =dict(zip(sardinia_df.ID, sardinia_df.n_phase))
+
+id = data_ns.participant_id.unique()[0]
+
+points_discrepancy = []
+for id in data_ns.participant_id.unique():
+    n_points = np.array(data_ns[data_ns.participant_id==id]['HGVSc'].value_counts())
+
+    # expected number of points
+    exp_points = n_phase_dict[id]
+
+    points_discrepancy.extend(list(exp_points - n_points))
+
+# percentage of complete trajectories
+proportion = np.sum([p== 0 for p in points_discrepancy])/len(points_discrepancy)
+proportion*100
+
+import seaborn as sns
+sns.histplot(x=points_discrepancy, bins=10)
+
+
+
+data_ns[data_ns['participant_id']==data_ns['participant_id'].unique()[0]]
+data_ns.wave.unique()
+data_ns.groupby('participant_id').min(numeric_only=True).
+len(data_ns.participant_id.unique())
+len(data_ns)
+
+import seaborn as sns
+import plotly.express as px
+px.histogram(x=data_ns.HGVSp.value_counts(),nbins=350)
+
+# check single participant
+data_ns[data_ns.participant_id == data_ns.participant_id.unique()[0]]
+
+data_ns.wave.unique()
+import seaborn as sns
+# check single mutation:
+sns.histplot(x=[len(data_ns[data_ns.HGVSc == mut]) for mut in  data_ns.HGVSc.unique()])
+
+sardiNIA_fabre_id_match = pd.read_csv('../data/sardiNIA/sardiNIA_id_match.csv')
+age_meta_df = pd.read_csv('../data/sardiNIA/fabre_deaths upd 2024.csv')
+
+#create ID dictionary
+ID_PD_map = dict(zip(sardiNIA_fabre_id_match.PD_ID, sardiNIA_fabre_id_match.Sard_ID))
+# rename participant_ids
+data_ns = data_ns.rename(columns={'participant_id':'participant_id_PD'})
+data_s = data_s.rename(columns={'participant_id':'participant_id_PD'})
+
+data_ns['participant_id'] = data_ns['participant_id_PD'].map(ID_PD_map)
+data_s['participant_id'] = data_ns['participant_id_PD'].map(ID_PD_map)
+
+# replace waves with age
+id_wave_age_dict = dict()
+for i, row in age_meta_df.iterrows():
+    id_wave_age_dict[row.ID] = np.array(row.iloc[1:6])
+
+data_ns.iloc[0].participant_id
+data_ns.iloc[0].wave
+
+data_ns.iloc[0].participant_id_PD
+id_wave_age_dict[data_ns.iloc[0].participant_id]
+
+data_ns.wave.unique()
+
+data_ns[data_ns.participant_id_PD == data_ns.participant_id_PD.unique()[1]]
 
 obs_columns = ['PreferredSymbol', 'HGVSc', 'chromosome', 'position', 'reference', 'mutation', 'consequence', 'Variant_Classification', 'AF_Outlier_Pvalue', 'X95MDAF', 'type', 'key', 'p_key', 'base_substitution']
 uns_info = ['Sex']
