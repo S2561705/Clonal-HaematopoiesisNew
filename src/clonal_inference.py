@@ -244,10 +244,16 @@ def plot_optimal_model(part):
 
     # Plot
     for i in range(len(cs)):
-        sns.lineplot(x=s_range, y=output[:, i]/ norm_max[i], label=f'clone {ms[i]}')
-    plt.xlabel('Fitness')
-    plt.ylabel('Normalised probability')
-    plt.show()
+        p_key_str = f''
+        for k, j in enumerate(cs[i]):
+            if k == 0:
+                p_key_str += f'{part[j].obs.p_key.values[0]}'
+            if k>0:
+                p_key_str += f'\n{part[j].obs.p_key.values[0]}'
+
+        sns.lineplot(x=s_range,
+                    y=output[:, i]/ norm_max[i],
+                    label=p_key_str)
 #endregion
 
 #region vectorised and jit optimised functions

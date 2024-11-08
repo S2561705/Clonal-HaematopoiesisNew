@@ -15,26 +15,13 @@ import statsmodels.formula.api as smf
 cohort_color_dict = {'sardiNIA':  '#f8cbad',
                     'WHI':  '#9dc3e6' ,
                     'LBC':  '#70ad47'}
+
+# Import results
+with open('../exports/all_processed_with_deterministic.pk', 'rb') as f:
+    cohort = pk.load(f)
 # %%
-
 # LBC Dataset
-# import results
-with open(b'../exports/LBC/merged_cohort_fitted.pk', 'rb') as f:
-    processed_lbc = pk.load(f)
-
-# create age_wave_1 dict
-# Load participant id map
-with open('../resources/LBC_cohort_1_id_map.pkl', 'rb') as json_file:
-    id_map = pk.load(json_file)
-
-
-inverse_id_map = {v:k for k,v in id_map.items()}
-
-inverse_ids = [v for v in inverse_id_map.keys()]
-for part in processed_lbc:
-    if part.uns['participant_id'] in inverse_ids:
-        part.uns['participant_id'] = inverse_id_map[
-            part.uns['participant_id']]
+processed_lbc = [part for part in cohort if 'LBC' in part.uns['cohort']]
 
 lbc21_meta = pd.read_csv('../data/LBC/LBC1921_ExtraVariables.csv')
 lbc36_meta = pd.read_csv('../data/LBC/LBC1936_ExtraVariables.csv')
@@ -61,21 +48,14 @@ lbc_df['from_wave_1'] = lbc_df['age_death'] - lbc_df['age_wave_1']
 lbc_df['cohort'] = 'LBC'
 lbc_df['death_cause'] = 'NaN'
 lbc_df['death_cause_num'] = np.nan
-
-
 # %%
 
 # Uddin Dataset
-# import results
-with open(b'../exports/WHI/WHI_fitted_1percent.pk', 'rb') as f:
-    processed_WHI = pk.load(f)
-
-# drop participants with warnings
-processed_WHI = [part for part in processed_WHI if part.uns['warning'] is None]
+processed_WHI = [part for part in cohort if part.uns['cohort']=='WHI']
 
 # load survival data
 # aging_df = pd.read_csv('../data/Uddin/outc_aging_ctos_inv.dat', sep='\t')
-WHI_df = pd.read_csv('../data/Uddin/outc_death_all_discovered_inv.dat', sep='\t')
+WHI_df = pd.read_csv('../data/WHI/outc_death_all_discovered_inv.dat', sep='\t')
 
 with open('../resources/WHI_death_cause.json', 'r') as f:
     death_cause_dict = json.load(f)
@@ -103,13 +83,11 @@ WHI_df['cohort'] = 'WHI'
 
 # %%
 
-# Import results
-with open('../exports/sardiNIA/sardiNIA_1percent_fitted.pk', 'rb') as f:
-    processed_sardinia = pk.load(f)
+# sardiNIA
+processed_sardinia = [part for part in cohort if part.uns['cohort']=='sardiNIA']
 
 sardinia_df = pd.read_csv('../data/sardiNIA/fabre_deaths upd 2024.csv')
 
-processed_sardinia = [part for part in processed_sardinia if part.uns['warning'] is None]
 
 sardinia_df = sardinia_df[sardinia_df.ID.isin([
                               part.uns['participant_id']
@@ -187,7 +165,6 @@ merged_survival['max_clonal_grad'] = merged_survival.apply(lambda x:
 
 # %%
 
-cohort_choice = ['LBC', 'WHI', 'sardiNIA']
 
 survival_df = merged_survival[merged_survival.cohort.isin(cohort_choice)].copy()
 survival_df['norm_max_clonal_grad'] = (survival_df['max_clonal_grad']-survival_df['max_clonal_grad'].mean())/survival_df['max_clonal_grad'].std()
@@ -197,6 +174,12 @@ survival_df['norm_max_fitness'] = (survival_df['max_fitness']-survival_df['max_f
 ylabel_dict = {'norm_max_vaf': 'Max VAF\n(scaled)',
                'norm_max_fitness':'Max Fitness\n(scaled)',
                'age_wave_1': 'Age'}
+
+survival_df.to_csv('../exports/survival_all.csv')
+
+# %%
+
+cohort_choice = ['LBC', 'WHI', 'sardiNIA']
 
 # Fit the Cox proportional hazards model
 cph = CoxPHFitter()
@@ -292,7 +275,7 @@ from scipy.stats import linregress
 age_regress = linregress(dead_df['age_wave_1'], dead_df['from_wave_1'])
 
 dead_df['survival_residual'] = dead_df['from_wave_1'] - (dead_df['age_wave_1']*age_regress.slope + age_regress.intercept)
-
+survival_df['survival_residual'] = survival_df['from_wave_1'] - (survival_df['age_wave_1']*age_regress.slope + age_regress.intercept)
 sns.regplot(dead_df, 
     x='survival_residual',
     y='max_fitness',
@@ -556,10 +539,10 @@ plt.show()
 plt.clf()
 # %%
 # cause of death analysis
-survival_df = merged_survival[merged_survival.cohort=='WHI'].copy()
+survival_WHI = merged_survival[merged_survival.cohort=='WHI'].copy()
 
 # Analize death cause
-cause_df = survival_df[survival_df['death_cause'].notna()].copy()
+cause_df = survival_WHI[survival_WHI['death_cause'].notna()].copy()
 death_cause_counts = cause_df.death_cause.value_counts().to_dict()
 
 results = []
@@ -616,3 +599,8 @@ plt.savefig('../results/survival/fitness_vs_death_cause.png', dpi=1000)
 plt.show()
 plt.clf()
 # %%
+
+
+sns.scatterplot(survival_df, x='age_wave_1', y='age_death', hue='dead')
+# %%
+

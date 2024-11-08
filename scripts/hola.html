@@ -1,0 +1,127 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 1000px;
+                 height: 1000px;
+                 background-color: #ffffff;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"color": "#00224e", "font": {"size": 20}, "id": "DNMT3A", "label": "DNMT3A", "shape": "dot", "size": 13.238404739325079}, {"color": "#163770", "font": {"size": 20}, "id": "TET2", "label": "TET2", "shape": "dot", "size": 12.693486957499324}, {"color": "#1a386f", "font": {"size": 20}, "id": "ASXL1", "label": "ASXL1", "shape": "dot", "size": 10.426264754702098}, {"color": "#6f7073", "font": {"size": 20}, "id": "PPM1D", "label": "PPM1D", "shape": "dot", "size": 10.0}, {"color": "#bcae6c", "font": {"size": 20}, "id": "SF3B1", "label": "SF3B1", "shape": "dot", "size": 9.954196310386875}, {"color": "#575d6d", "font": {"size": 20}, "id": "TP53", "label": "TP53", "shape": "dot", "size": 9.643856189774723}, {"color": "#2e416d", "font": {"size": 20}, "id": "CBL", "label": "CBL", "shape": "dot", "size": 9.321928094887362}, {"color": "#00224e", "font": {"size": 20}, "id": "NOTCH1", "label": "NOTCH1", "shape": "dot", "size": 8.700439718141093}, {"color": "#2a3f6d", "font": {"size": 20}, "id": "JAK2", "label": "JAK2", "shape": "dot", "size": 8.584962500721156}, {"color": "#fee838", "font": {"size": 20}, "id": "SRSF2", "label": "SRSF2", "shape": "dot", "size": 8.321928094887362}, {"color": "#00224e", "font": {"size": 20}, "id": "BCORL1", "label": "BCORL1", "shape": "dot", "size": 8.169925001442312}, {"color": "#46516c", "font": {"size": 20}, "id": "CREBBP", "label": "CREBBP", "shape": "dot", "size": 8.0}, {"color": "#00224e", "font": {"size": 20}, "id": "GNAS", "label": "GNAS", "shape": "dot", "size": 7.807354922057604}, {"color": "#00224e", "font": {"size": 20}, "id": "CUX1", "label": "CUX1", "shape": "dot", "size": 7.584962500721156}, {"color": "#928c78", "font": {"size": 20}, "id": "KRAS", "label": "KRAS", "shape": "dot", "size": 7.321928094887362}, {"color": "#00224e", "font": {"size": 20}, "id": "KDM6A", "label": "KDM6A", "shape": "dot", "size": 7.321928094887362}, {"color": "#fee838", "font": {"size": 20}, "id": "U2AF1", "label": "U2AF1", "shape": "dot", "size": 7.321928094887362}, {"color": "#00224e", "font": {"size": 20}, "id": "STAG2", "label": "STAG2", "shape": "dot", "size": 7.321928094887362}, {"color": "#00224e", "font": {"size": 20}, "id": "ZRSR2", "label": "ZRSR2", "shape": "dot", "size": 7.321928094887362}, {"color": "#00224e", "font": {"size": 20}, "id": "SMC1A", "label": "SMC1A", "shape": "dot", "size": 7.0}, {"color": "#00224e", "font": {"size": 20}, "id": "ZNF318", "label": "ZNF318", "shape": "dot", "size": 7.0}, {"color": "#838179", "font": {"size": 20}, "id": "BRCC3", "label": "BRCC3", "shape": "dot", "size": 7.0}, {"color": "#b7a96e", "font": {"size": 20}, "id": "GNB1", "label": "GNB1", "shape": "dot", "size": 6.584962500721156}, {"color": "#a89e73", "font": {"size": 20}, "id": "EZH2", "label": "EZH2", "shape": "dot", "size": 6.584962500721156}, {"color": "#00224e", "font": {"size": 20}, "id": "SMC3", "label": "SMC3", "shape": "dot", "size": 6.584962500721156}, {"color": "#00224e", "font": {"size": 20}, "id": "NF1", "label": "NF1", "shape": "dot", "size": 6.584962500721156}, {"color": "#00224e", "font": {"size": 20}, "id": "CTCF", "label": "CTCF", "shape": "dot", "size": 6.584962500721156}, {"color": "#cbb965", "font": {"size": 20}, "id": "LUC7L2", "label": "LUC7L2", "shape": "dot", "size": 6.584962500721156}, {"color": "#1e3a6f", "font": {"size": 20}, "id": "PTPN11", "label": "PTPN11", "shape": "dot", "size": 6.584962500721156}, {"color": "#00224e", "font": {"size": 20}, "id": "CALR", "label": "CALR", "shape": "dot", "size": 6.0}, {"color": "#00224e", "font": {"size": 20}, "id": "KMT2A", "label": "KMT2A", "shape": "dot", "size": 6.0}, {"color": "#fee838", "font": {"size": 20}, "id": "NRAS", "label": "NRAS", "shape": "dot", "size": 6.0}, {"color": "#918b78", "font": {"size": 20}, "id": "ZBTB33", "label": "ZBTB33", "shape": "dot", "size": 5.0}, {"color": "#fee838", "font": {"size": 20}, "id": "RUNX1", "label": "RUNX1", "shape": "dot", "size": 5.0}, {"color": "#888578", "font": {"size": 20}, "id": "SF3A1", "label": "SF3A1", "shape": "dot", "size": 5.0}]);
+                  edges = new vis.DataSet([{"color": "#5d616e", "from": "DNMT3A", "to": "TET2", "width": 4.433987204485146}, {"color": "#676a71", "from": "DNMT3A", "to": "CUX1", "width": 2.0986122886681096}, {"color": "#00224e", "from": "DNMT3A", "to": "NOTCH1", "width": 1.6931471805599454}, {"color": "#767676", "from": "DNMT3A", "to": "SF3B1", "width": 2.386294361119891}, {"color": "#5c616e", "from": "DNMT3A", "to": "CREBBP", "width": 2.0986122886681096}, {"color": "#5d616e", "from": "DNMT3A", "to": "PPM1D", "width": 2.0986122886681096}, {"color": "#4b546c", "from": "DNMT3A", "to": "DNMT3A", "width": 5.127134385045092}, {"color": "#444f6c", "from": "DNMT3A", "to": "ASXL1", "width": 3.197224577336219}, {"color": "#565c6d", "from": "DNMT3A", "to": "EZH2", "width": 1.6931471805599454}, {"color": "#203a6f", "from": "DNMT3A", "to": "ZRSR2", "width": 2.0986122886681096}, {"color": "#807f78", "from": "DNMT3A", "to": "GNB1", "width": 1.6931471805599454}, {"color": "#00224e", "from": "DNMT3A", "to": "CTCF", "width": 1.6931471805599454}, {"color": "#8d8878", "from": "DNMT3A", "to": "GNAS", "width": 1.6931471805599454}, {"color": "#636670", "from": "DNMT3A", "to": "KDM6A", "width": 1.6931471805599454}, {"color": "#404c6c", "from": "DNMT3A", "to": "CBL", "width": 2.0986122886681096}, {"color": "#727374", "from": "DNMT3A", "to": "BRCC3", "width": 1.6931471805599454}, {"color": "#7e7d78", "from": "DNMT3A", "to": "ZBTB33", "width": 1.6931471805599454}, {"color": "#7c7b78", "from": "DNMT3A", "to": "U2AF1", "width": 1.6931471805599454}, {"color": "#958f77", "from": "DNMT3A", "to": "ZNF318", "width": 1.6931471805599454}, {"color": "#5f636f", "from": "DNMT3A", "to": "STAG2", "width": 1.6931471805599454}, {"color": "#757575", "from": "DNMT3A", "to": "NF1", "width": 1.6931471805599454}, {"color": "#807f78", "from": "DNMT3A", "to": "JAK2", "width": 2.0986122886681096}, {"color": "#898578", "from": "DNMT3A", "to": "TP53", "width": 1.6931471805599454}, {"color": "#666970", "from": "DNMT3A", "to": "LUC7L2", "width": 1.6931471805599454}, {"color": "#6a6c71", "from": "DNMT3A", "to": "BCORL1", "width": 1.6931471805599454}, {"color": "#727374", "from": "TET2", "to": "GNB1", "width": 1.6931471805599454}, {"color": "#46516c", "from": "TET2", "to": "CUX1", "width": 2.6094379124341005}, {"color": "#6c6d72", "from": "TET2", "to": "TET2", "width": 4.218875824868201}, {"color": "#858279", "from": "TET2", "to": "CBL", "width": 2.386294361119891}, {"color": "#5b606e", "from": "TET2", "to": "JAK2", "width": 2.0986122886681096}, {"color": "#797977", "from": "TET2", "to": "PPM1D", "width": 2.386294361119891}, {"color": "#5e636f", "from": "TET2", "to": "TP53", "width": 2.6094379124341005}, {"color": "#33446d", "from": "TET2", "to": "ASXL1", "width": 3.0794415416798357}, {"color": "#696b71", "from": "TET2", "to": "CREBBP", "width": 2.0986122886681096}, {"color": "#707173", "from": "TET2", "to": "GNAS", "width": 1.6931471805599454}, {"color": "#717274", "from": "TET2", "to": "SF3B1", "width": 2.791759469228055}, {"color": "#656870", "from": "TET2", "to": "BCORL1", "width": 2.386294361119891}, {"color": "#777777", "from": "TET2", "to": "NRAS", "width": 1.6931471805599454}, {"color": "#958f77", "from": "TET2", "to": "CTCF", "width": 1.6931471805599454}, {"color": "#9b9476", "from": "TET2", "to": "SRSF2", "width": 1.6931471805599454}, {"color": "#9a9376", "from": "TET2", "to": "EZH2", "width": 1.6931471805599454}, {"color": "#9a9376", "from": "TET2", "to": "RUNX1", "width": 1.6931471805599454}, {"color": "#00224e", "from": "TET2", "to": "KMT2A", "width": 1.6931471805599454}, {"color": "#434e6c", "from": "TET2", "to": "ZNF318", "width": 1.6931471805599454}, {"color": "#b1a570", "from": "TET2", "to": "U2AF1", "width": 1.6931471805599454}, {"color": "#00224e", "from": "ASXL1", "to": "NOTCH1", "width": 1.6931471805599454}, {"color": "#aea371", "from": "ASXL1", "to": "SRSF2", "width": 1.6931471805599454}, {"color": "#51586d", "from": "ASXL1", "to": "SMC1A", "width": 1.6931471805599454}, {"color": "#9a9376", "from": "ASXL1", "to": "EZH2", "width": 1.6931471805599454}, {"color": "#00224e", "from": "ASXL1", "to": "KMT2A", "width": 1.6931471805599454}, {"color": "#9c9576", "from": "ASXL1", "to": "ASXL1", "width": 2.0986122886681096}, {"color": "#414d6c", "from": "PPM1D", "to": "SMC1A", "width": 2.0986122886681096}, {"color": "#9b9476", "from": "PPM1D", "to": "SF3B1", "width": 1.6931471805599454}, {"color": "#757575", "from": "PPM1D", "to": "CTCF", "width": 1.6931471805599454}, {"color": "#a59c74", "from": "PPM1D", "to": "GNB1", "width": 1.6931471805599454}, {"color": "#c0b16a", "from": "PPM1D", "to": "PPM1D", "width": 1.6931471805599454}, {"color": "#666970", "from": "SF3B1", "to": "SF3B1", "width": 2.0986122886681096}, {"color": "#aea371", "from": "SF3B1", "to": "TP53", "width": 1.6931471805599454}, {"color": "#7e7d78", "from": "TP53", "to": "CBL", "width": 1.6931471805599454}, {"color": "#a99f73", "from": "TP53", "to": "LUC7L2", "width": 1.6931471805599454}, {"color": "#8f8a78", "from": "TP53", "to": "KRAS", "width": 1.6931471805599454}, {"color": "#434e6c", "from": "CBL", "to": "CALR", "width": 1.6931471805599454}, {"color": "#707173", "from": "CBL", "to": "PTPN11", "width": 1.6931471805599454}, {"color": "#7e7c78", "from": "CREBBP", "to": "GNAS", "width": 2.0986122886681096}, {"color": "#3b496c", "from": "KDM6A", "to": "BRCC3", "width": 1.6931471805599454}, {"color": "#7c7b78", "from": "SMC3", "to": "SF3A1", "width": 1.6931471805599454}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {"physics": {"forceAtlas2Based": {"springLength": 100}, "minVelocity": 0.75, "solver": "forceAtlas2Based"}};
+
+                  
+
+
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>

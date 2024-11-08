@@ -6,7 +6,7 @@ dependencies:
   - python
   - numpy
   - pandas
-  - anndata
+  - anndata == 0.10.8
   - plotly
   - matplotlib
   - python-kaleido
@@ -18,7 +18,7 @@ dependencies:
   - nbformat
   - openpyxl
   - lifelines
-  - ipykernel
+  - ipywidgets
   - scipy<1.13
   - seaborn
   - pymc
@@ -28,3 +28,5 @@ dependencies:
   - pyvis
   - numba
   - scikit-survival
+  - aesara
+  - statannot

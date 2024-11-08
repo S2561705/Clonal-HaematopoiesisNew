@@ -20,22 +20,7 @@ contains_gene = None
 
 # Import results
 with open('../exports/WHI/WHI_fitted_1percent.pk', 'rb') as f:
-    processed_WHI = pk.load(f)
-
-with open('../exports/LBC/merged_cohort_fitted.pk', 'rb') as f:
-    processed_lbc = pk.load(f)
-
-with open('../exports/sardiNIA/sardiNIA_1percent_fitted.pk', 'rb') as f:
-    processed_sardinia = pk.load(f)
-
-for cohort_name, cohort in zip(['WHI', 'LBC', 'sardiNIA'],
-                  [processed_WHI, processed_lbc, processed_sardinia]):
-    for part in cohort:
-        part.obs['cohort'] = cohort_name
-        part.obs['sample ID'] = part.uns['participant_id']
-
-cohort = processed_WHI + processed_lbc + processed_sardinia
-cohort = [part for part in cohort if part.uns['warning'] is None]
+    cohort = pk.load(f)
 
 # Create Network plot
 for i, part in enumerate(cohort):
