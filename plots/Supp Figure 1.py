@@ -4,6 +4,7 @@ sys.path.append("..")   # fix to import modules from root
 from src.general_imports import *
 from src.clonal_inference import *
 from src.deterministic_aux import *
+from statannotations.Annotator import Annotator
 
 import matplotlib.gridspec as gridspec
 import pickle as pk
@@ -21,6 +22,83 @@ part_summary = pd.read_csv('../results/participant_df.csv')
 part_summary = part_summary.sort_values(by='cohort')
 
 # %%
+
+order = ['LBC', 'sardiNIA', 'WHI']
+fig, ax= plt.subplots()
+sns.boxplot(x=summary.cohort, y=summary.fitness, 
+            order=order,
+            palette=cohort_color_dict)
+pairs=[("LBC", "WHI"), ("WHI", "sardiNIA"), ("sardiNIA", "LBC")]
+
+annotator = Annotator(ax, pairs, data=summary, x='cohort', y='fitness', order=order)
+annotator.configure(test='Brunner-Munzel', text_format='simple', loc='inside')
+annotator.apply_and_annotate()
+
+sns.despine()
+plt.ylabel('Fitness')
+plt.xlabel('')
+plt.savefig('../plots/Supp Figure 1/fitness_by_cohort_stats.png', dpi=200, transparent=True)
+plt.savefig('../plots/Supp Figure 1/fitness_by_cohort_stats.svg', transparent=True)
+plt.show()
+plt.clf()
+
+order = ['LBC', 'sardiNIA', 'WHI']
+fig, ax= plt.subplots()
+sns.boxplot(x=part_summary.cohort, y=part_summary.max_fitness, 
+            order=order,
+            palette=cohort_color_dict)
+
+pairs=[("LBC", "WHI"), ("WHI", "sardiNIA"), ("sardiNIA", "LBC")]
+
+annotator = Annotator(ax, pairs, data=part_summary, x='cohort', y='max_fitness', order=order)
+annotator.configure(test='Brunner-Munzel', text_format='simple', loc='inside')
+annotator.apply_and_annotate()
+
+sns.despine()
+plt.ylabel('Fitness')
+plt.xlabel('')
+plt.savefig('../plots/Supp Figure 1/max_fitness_by_cohort_stats.png', dpi=200, transparent=True)
+plt.savefig('../plots/Supp Figure 1/max_fitness_by_cohort_stats.svg', transparent=True)
+# %%
+
+order = ['LBC', 'sardiNIA', 'WHI']
+fig, ax= plt.subplots()
+sns.boxplot(x=summary.cohort, y=summary.mut_max_VAF, 
+            order=order,
+            palette=cohort_color_dict)
+pairs=[("LBC", "WHI"), ("WHI", "sardiNIA"), ("sardiNIA", "LBC")]
+
+annotator = Annotator(ax, pairs, data=summary, x='cohort', y='mut_max_VAF', order=order)
+annotator.configure(test='Brunner-Munzel', text_format='simple', loc='inside')
+annotator.apply_and_annotate()
+
+sns.despine()
+plt.ylabel('VAF')
+plt.xlabel('')
+plt.savefig('../plots/Supp Figure 1/VAF_by_cohort_stats.png', dpi=200, transparent=True)
+plt.savefig('../plots/Supp Figure 1/VAF_by_cohort_stats.svg', transparent=True)
+plt.show()
+plt.clf()
+
+order = ['LBC', 'sardiNIA', 'WHI']
+fig, ax= plt.subplots()
+sns.boxplot(x=part_summary.cohort, y=part_summary.max_VAF, 
+            order=order,
+            palette=cohort_color_dict)
+
+pairs=[("LBC", "WHI"), ("WHI", "sardiNIA"), ("sardiNIA", "LBC")]
+
+annotator = Annotator(ax, pairs, data=part_summary, x='cohort', y='max_VAF', order=order)
+annotator.configure(test='Brunner-Munzel', text_format='simple', loc='inside')
+annotator.apply_and_annotate()
+
+sns.despine()
+plt.ylabel('VAF')
+plt.xlabel('')
+plt.savefig('../plots/Supp Figure 1/max_VAF_by_cohort_stats.png', dpi=200, transparent=True)
+plt.savefig('../plots/Supp Figure 1/max_VAF_by_cohort_stats.svg', transparent=True)
+
+
 
 # %%
 # Figure 1B

@@ -21,6 +21,8 @@ part_summary = pd.read_csv('../results/participant_df.csv')
 
 part_summary = part_summary.sort_values(by='cohort')
 
+summary.groupby('PreferredSymbol').mean(numeric_only=True).sort_values(by='fitness').fitness
+
 # %%
 # Figure 1A
 # Plot one participant from each cohort
@@ -236,7 +238,7 @@ cosmic_df = pd.read_csv('../data/Site_mutsWed Apr 3 10 00 12 2024.csv')
 cosmic_df['p_key'] = cosmic_df['Gene Name'] + ' ' + cosmic_df['AA Mutation']
 
 # Assuming cosmic_df and summary_filtered dataframes are already loaded
-fitness_threshold = 0.02
+fitness_threshold = 0
 gene_count_threshold = 1
 
 gene_counts = summary[summary.fitness > fitness_threshold].PreferredSymbol.value_counts()
@@ -373,23 +375,25 @@ plt.savefig('../plots/Figure 1/cosmic_combined_fitness_box_broken.svg',
 plt.show()
 
 # %%
-
 from matplotlib.colors import TwoSlopeNorm
 
 # Assuming your dataset is called 'df'
 # df = pd.read_csv('your_dataset.csv')
 
-def kruskal_wallis_test(group1, group2):
+def brunnermunzel_test(group1, group2):
     if len(group1) < 2 or len(group2) < 2:
         return 0, 1  # Return statistic 0 and p-value 1
     if group1.equals(group2):  # Skip if the groups are identical
         return 0, 1  # Return statistic 0 and p-value 1
     try:
-        statistic, p_value = stats.kruskal(group1, group2)
+        # statistic, p_value = stats.kruskal(group1, group2)
+        statistic, p_value = stats.brunnermunzel(group1, group2)
+
         return statistic, p_value
     except ValueError:
         return 0, 1  # Return statistic 0 and p-value 1
-
+    
+summary_filtered = summary[summary.fitness>fitness_threshold].copy()
 # Get genes with at least 2 instances
 gene_counts = summary['PreferredSymbol'].value_counts()
 valid_genes = gene_counts[gene_counts >= 2].index.tolist()
@@ -408,7 +412,8 @@ for i, gene1 in enumerate(ordered_genes):
         if i < j:  # To avoid redundant comparisons
             group1 = summary[summary['PreferredSymbol'] == gene1]['fitness']
             group2 = summary[summary['PreferredSymbol'] == gene2]['fitness']
-            _, p_value = kruskal_wallis_test(group1, group2)
+            _, p_value = brunnermunzel_test(group1, group2)
+            # _, p_value = stats.brunnermunzel(group1, group2)
             p_values.loc[gene1, gene2] = p_value
             p_values.loc[gene2, gene1] = p_value
 
@@ -450,6 +455,265 @@ colorbar.ax.text(2, 1.5, 'Significance level \n-log10 (p-value)',
 
 plt.savefig('../plots/Figure 1/kruskal_wallis_heatmap.png', transparent=True, dpi=300)
 plt.savefig('../plots/Figure 1/kruskal_wallis_heatmap.svg')
+
+# %%
+# %%
+inverse_gene_categories = {
+    'DNMT3A': 'Epigenetic_Regulation',
+    'TET2': 'Epigenetic_Regulation',
+    'ASXL1': 'Epigenetic_Regulation',
+    'SF3B1': 'RNA_Splicing_Processing',
+    'PPM1D': 'Signal_Transduction',
+    'TP53': 'Transcription_Factors',
+    'CBL': 'Signal_Transduction',
+    'SRSF2': 'RNA_Splicing_Processing',
+    'NOTCH1': 'Signal_Transduction',
+    'JAK2': 'Signal_Transduction',
+    'CREBBP': 'Epigenetic_Regulation',
+    'BCORL1': 'Transcription_Factors',
+    'KRAS': 'Signal_Transduction',
+    'U2AF1': 'RNA_Splicing_Processing',
+    'BRCC3': 'Chromatin_Structure',
+    'STAG2': 'Chromatin_Structure',
+    'WT1': 'Transcription_Factors',
+    'GNAS': 'Signal_Transduction',
+    'ZRSR2': 'RNA_Splicing_Processing',
+    'EZH2': 'Epigenetic_Regulation',
+    'ZNF318': 'Transcription_Factors',
+    'RAD21': 'Chromatin_Structure',
+    'SMC1A': 'Chromatin_Structure',
+    'CUX1': 'Transcription_Factors',
+    'KDM6A': 'Epigenetic_Regulation',
+    'GNB1': 'Signal_Transduction',
+    'LUC7L2': 'RNA_Splicing_Processing',
+    'SMC3': 'Chromatin_Structure',
+    'NRAS': 'Signal_Transduction',
+    'U2AF2': 'RNA_Splicing_Processing',
+    'CEBPA': 'Transcription_Factors',
+    'PTPN11': 'Signal_Transduction',
+    'SH2B3': 'Signal_Transduction',
+    'CTCF': 'Chromatin_Structure',
+    'NF1': 'Signal_Transduction',
+    'PRPF40B': 'RNA_Splicing_Processing',
+    'PHF6': 'Epigenetic_Regulation',
+    'BRAF': 'Signal_Transduction',
+    'MPL': 'Signal_Transduction',
+    'IDH1': 'Epigenetic_Regulation',
+    'RUNX1': 'Transcription_Factors',
+    'IDH2': 'Epigenetic_Regulation',
+    'ZBTB33': 'Transcription_Factors',
+    'ETV6': 'Transcription_Factors',
+    'SF3A1': 'RNA_Splicing_Processing',
+    'PTEN': 'Signal_Transduction',
+    'GATA2': 'Transcription_Factors',
+    'CALR': 'Signal_Transduction'
+}
+
+summary['gene_category'] = summary.PreferredSymbol.map(inverse_gene_categories)
+summary_filtered = summary[summary.fitness > fitness_threshold].copy()
+
+gene_category_order = summary_filtered.groupby('gene_category').mean(numeric_only=True).sort_values(by='fitness', ascending=False).index
+
+outliers= []
+# Identify outliers
+for category in summary_filtered['gene_category'].unique():
+    subset = summary_filtered[summary_filtered['gene_category'] == category]
+    q1 = subset['fitness'].quantile(0.25)
+    q3 = subset['fitness'].quantile(0.75)
+    iqr = q3 - q1
+    # lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
+    outliers.append(subset[subset['fitness'] > upper_bound])
+
+outliers = pd.concat(outliers)
+
+outliers_dict = {'SF3B1 p.K666M': 'AML/MDS',
+                'TET2 p.I1873T': 'AML/MDS',
+                'TET2 p.Y1245C': 'CML',
+                'TET2 p.L1332P': 'AML',
+                'DNMT3A p.M682Cfs*23': 'AML',
+                'DNMT3A p.S770L': 'AML/MDS',
+                'U2AF1 p.Q84R': 'AML',
+                'BCORL1 p.Leu236Arg': 'Not Reported',
+                'CBL c.2252-2A>G': 'Meningioma',
+                'TET2 p.T1883K': 'AML/CML',
+                'TET2 p.P401fs': 'AML',
+                'TET2 p.I274fs': 'CML',
+                'TET2 p.Gln321Ter': 'AML/MDS',
+                'NOTCH1 p.A1323S': 'Glioma',
+                'NaN': 'AML/Lymph Neoplasm',
+                'DNMT3A c.1429+1G>A':'AML/Lymph Neoplasm',
+                'DNMT3A p.Tyr735Cys': 'AML',
+                'DNMT3A p.R379C': 'Carcinoma',
+                'ZNF318 p.R275Vfs*6': 'Carcinoma',
+                'CUX1 p.V282V': 'Not Reported'}
+
+outliers['reports'] = outliers['p_key'].map(outliers_dict)
+
+# Define the desired order for the hue categories
+hue_order = ['AML', 'CML', 'AML/CML', 'AML/MDS', 'AML/Lymph Neoplasm', 
+             'Meningioma', 'Glioma', 'Carcinoma', 'Not Reported']
+
+
+# Create figure with broken axis
+f, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(14, 6), 
+                            gridspec_kw={'height_ratios': [1,   6], 'hspace': 0.05})
+
+# Plot the same data on both axes
+sns.boxplot(data=summary_filtered, x='gene_category', y='fitness',
+            order=gene_category_order,
+            showfliers=False, palette=sns.color_palette(), legend=False,
+            ax=ax1)
+
+sns.boxplot(data=summary_filtered, x='gene_category', y='fitness',
+            order=gene_category_order,
+            showfliers=False, palette=sns.color_palette(), ax=ax2)
+
+# Plot stripplot for outliers on both axes
+sns.stripplot(data=outliers, x='gene_category', y='fitness',
+             order=gene_category_order,
+             hue='reports', jitter=0.8, hue_order=hue_order, dodge=True, 
+             marker='o', size=7, edgecolor='none', ax=ax1)
+
+sns.stripplot(data=outliers, x='gene_category', y='fitness',
+             order=gene_category_order,
+             hue='reports', jitter=0.8, hue_order=hue_order, dodge=True, 
+             marker='o', size=7, edgecolor='none', ax=ax2)
+
+# Set different y-axis limits for each subplot
+ax1.set_ylim(0.94, 1.0)  # Upper subplot
+ax2.set_ylim(0, 0.65)     # Lower subplot
+ax1.set_ylim(0.94, 1.0)  # Upper subplot
+ax2.set_ylim(0, 0.65)     # Lower subplot
+
+# hide the spines between ax and ax2
+ax1.spines.bottom.set_visible(False)
+ax1.tick_params(labeltop=False, bottom=False)
+ax1.spines.top.set_visible(False)
+ax1.spines.right.set_visible(False)
+ax1.set_yticks([0.95, 1])
+ax1.set_ylabel("")
+
+ax2.spines.top.set_visible(False)
+ax2.xaxis.tick_bottom()
+ax2.spines.right.set_visible(False)
+ax2.set_ylabel("Fitness", fontsize=15)
+ax2.set_xlabel("")
+ax1.tick_params(axis='both', which='major', labelsize=12)  # Increase top subplot tick size
+ax2.tick_params(axis='both', which='major', labelsize=12)
+ax2.legend(title='Reports', bbox_to_anchor=(1.05, 1), loc='upper left')
+
+# Set x-tick labels with right anchor
+plt.setp(ax2.get_xticklabels(), rotation=55, ha='right', rotation_mode="anchor")
+
+
+d = .5  # proportion of vertical to horizontal extent of the slanted line
+kwargs = dict(marker=[(-1, -d), (1, d)], markersize=12,
+              linestyle="none", color='k', mec='k', mew=1, clip_on=False)
+ax1.plot([0], [0], transform=ax1.transAxes, **kwargs)
+ax2.plot([0], [1], transform=ax2.transAxes, **kwargs)
+
+plt.xticks(rotation=55)
+# Move legend to top right of ax1
+ax1.legend(title='Reports', bbox_to_anchor=(1.02, 1), loc='best')
+ax2.get_legend().remove()  # Remove legend from bottom plot
+
+change_boxplot_opacity(ax2, 0.7)
+
+# Adjust layout to prevent label cutoff
+# plt.tight_layout()
+# plt.xlim(-1)
+
+# Save the figure
+plt.savefig('../plots/Figure 1/cosmic_combined_fitness_box_broken_gene_category.png', 
+            dpi=1000, transparent=True, bbox_inches='tight')
+
+# Save the figure
+plt.savefig('../plots/Figure 1/cosmic_combined_fitness_box_broken_gene_category.svg', 
+            bbox_inches='tight')
+plt.show()
+
+summary_filtered.groupby(by='gene_category').mean(numeric_only=True).fitness
+# %%
+from matplotlib.colors import TwoSlopeNorm
+
+# Assuming your dataset is called 'df'
+# df = pd.read_csv('your_dataset.csv')
+summary_filtered = summary[summary.fitness>fitness_threshold].copy()
+
+def brunnermunzel_test(group1, group2):
+    if len(group1) < 2 or len(group2) < 2:
+        return 0, 1  # Return statistic 0 and p-value 1
+    if group1.equals(group2):  # Skip if the groups are identical
+        return 0, 1  # Return statistic 0 and p-value 1
+    try:
+        statistic, p_value = stats.brunnermunzel(group1, group2)
+        return statistic, p_value
+    except ValueError:
+        return 0, 1  # Return statistic 0 and p-value 1
+
+# Get genes with at least 2 instances
+gene_counts = summary_filtered['gene_category'].value_counts()
+valid_genes = gene_counts[gene_counts >= 2].index.tolist()
+
+# Calculate median fitness for each gene
+median_fitness = summary_filtered.groupby('gene_category')['fitness'].mean().sort_values(ascending=False)
+ordered_genes = median_fitness.index.intersection(valid_genes).tolist()
+
+# Create empty DataFrames to store results
+p_values = pd.DataFrame(1.0, index=ordered_genes, columns=ordered_genes)
+
+# Perform Kruskal-Wallis test for each pair of genes
+for i, gene1 in enumerate(ordered_genes):
+    for j, gene2 in enumerate(ordered_genes):
+        if i < j:  # To avoid redundant comparisons
+            group1 = summary_filtered[summary_filtered['gene_category'] == gene1]['fitness']
+            group2 = summary_filtered[summary_filtered['gene_category'] == gene2]['fitness']
+            _, p_value = brunnermunzel_test(group1, group2)
+            p_values.loc[gene1, gene2] = p_value
+            p_values.loc[gene2, gene1] = p_value
+
+
+# # Filter out genes without any significant interactions
+# significant_genes = p_values.index[
+#     (p_values < 0.05).any(axis=1) | (p_values < 0.05).any(axis=0)
+# ].tolist()
+# p_values_filtered = p_values.loc[significant_genes, significant_genes]
+p_values_filtered = p_values
+log_p_values = -np.log10(p_values_filtered)
+log_p_values_clipped = log_p_values.where(log_p_values<3, 3)
+
+fig, ax = plt.subplots(figsize=(12, 10))
+rdgn = sns.diverging_palette(h_neg=220, h_pos=20, s=70, l=60, sep=1, as_cmap=True)
+divnorm = TwoSlopeNorm(vmin=np.min(log_p_values_clipped), vcenter=1.3, vmax=np.max(log_p_values_clipped))
+sns.heatmap(log_p_values_clipped, cmap=rdgn, norm=divnorm, 
+            cbar=True, ax=ax)
+x_ticks = log_p_values_clipped.index
+# ax.tick_params(axis='x', labelsize=12)
+# ax.xaxis.set_tick_params(rotation=60)
+# ax.tick_params(axis='y', labelsize=12)
+ax.set_xticklabels(x_ticks, rotation=60, fontsize=12, ha='right') # rotate the labels with proper anchoring.
+ax.set_yticklabels(x_ticks, fontsize=12, ha='right') # rotate the labels with proper anchoring.
+
+
+# Add significance level line to colorbar
+colorbar = ax.collections[0].colorbar
+# Increase tick label size
+colorbar.ax.tick_params(labelsize=12)  # Increase tick label size
+
+# Add significance level
+colorbar.ax.axhline(y=1.3, color='black', linestyle='--', linewidth=1)
+colorbar.ax.text(2, 1.5, 'Significance level \n-log10 (p-value)', 
+                va='center', 
+                ha='left',
+                color='black',
+                rotation=90,
+                fontsize=12,
+                )
+
+
+plt.savefig('../plots/Figure 1/kruskal_wallis_heatmap_gene_category.png', transparent=True, dpi=300, bbox_inches='tight')
+plt.savefig('../plots/Figure 1/kruskal_wallis_heatmap_gene_category.svg')
 
 # %%
 
@@ -579,6 +843,7 @@ sns.despine()
 ax[1].tick_params(labelleft=False, labelbottom=False, bottom=False)
 ax[1].set_ylabel('')
 ax[0].legend(loc="upper left", ncol=3)
+
 # Adjust layout
 # plt.tight_layout()
 plt.savefig('../plots/Figure 1/fitness_by_overall_order_selected_genes.png', transparent=True, dpi=200)
@@ -657,5 +922,118 @@ plt.savefig('../plots/Figure 1/fitness_vs_ATMA_by_age.svg')
 
 plt.show()
 plt.clf()
+
+# %%
+outliers = summary[
+                (summary.mut_max_VAF<0.05) 
+                   & (summary.fitness>0.3) 
+                #    & (summary.mut_max_VAF>0.02)
+                   ]
+
+outliers[['Unnamed: 0', 'p_key']]
+outliers_dict = {'DNMT3A c.1122+1G>A': 'Tatton-Brown',
+                'U2AF2 c.56173940T>G': 'AML',
+                'U2AF1 c.44514777T>C':'AML',
+                'PPM1D c.1351G>T': 'Carcinoma',	
+                'CBL c.1139T>C': 'CML',
+                'CBL c.119149219G>A	': 'AML',
+                'BRAF c.140453193T>A': 'CLL',
+                'SF3B1 c.198267360T>G	':'AML/CLL',
+                'SF3B1 p.K700E': 'AML/CLL',
+                'SF3B1 c.2098A>G': 'AML/CLL',
+                'SF3B1 c.1998G>T':'AML',
+                'SF3B1 c.198266834T>C':'CLL',
+                'SRSF2 c.74732959G>T': 'CML',
+                'TET2 c.106180841C>T': 'TL',
+
+
+                    	}
+outliers['Reports'] = outliers['Unnamed: 0'].map(outliers_dict)
+
+fig, ax = plt.subplots()
+sns.regplot(summary, x='fitness', y='mut_max_VAF',
+            color='grey',ax=ax)
+plt.hlines(0.05, 0.3, 1, linestyle='--', color='red')
+plt.vlines(0.3, 0, 0.05, linestyle='--', color='red')
+
+# Add transparent red box
+rect = plt.Rectangle((0.3, 0), 0.7, 0.05, 
+                    facecolor='red', 
+                    alpha=0.1)  # alpha controls transparency
+ax.add_patch(rect)
+sns.scatterplot(outliers, x='fitness', y='mut_max_VAF', hue='Reports')
+sns.despine()
+plt.xlabel('Fitness')
+plt.ylabel('Max VAF')
+# plt.ylim(-0.005,0.5)
+plt.yscale('log')
+
+# Set specific y-ticks including 0.05
+y_ticks = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5]
+ax.set_yticks(y_ticks)
+ax.set_yticklabels(['{:.2f}'.format(y) for y in y_ticks])
+
+
+plt.legend(loc='upper right')
+
+plt.savefig('../plots/Supp Figure 1/low_vaf_high_fitness.png', transparent=True, dpi=200)
+plt.savefig('../plots/Supp Figure 1/low_vaf_high_fitness.svg', transparent=True)
+# %%
+
+
+
+tet2 = summary[summary.PreferredSymbol=='TET2'].copy()
+
+tet2.groupby('overall_order').mean(numeric_only=True).fitness
+tet2.fitness.max()
+0.271112/0.067292
+data = [tet2[tet2.overall_order == 4].fitness,
+        tet2[tet2.overall_order == 1].fitness]
+
+stats.ttest_ind(*data)
+
+# %%
+
+
+
+# %%
+
+# export participant_data
+with open('../exports/final_participant_list.pk', 'rb') as f:
+    cohort = pk.load(f)
+
+
+len([part for part in cohort if part.shape[0]==3])
+sub_cohort = [part for part in cohort if part.shape[0]==3]
+
+# Export mutation-level dataframe
+overlaping_columns = [set(part.obs.columns) for part in sub_cohort]
+overlaping_columns = list(set.intersection(*overlaping_columns))
+
+summary = pd.concat([part.obs[overlaping_columns] for part in sub_cohort])
+summary = summary.sort_values(by='fitness', ascending=False)
+
+
+# Create filtered dataset for only relevant genes
+filtered_df = summary[summary.PreferredSymbol.isin(['DNMT3A', 'TET2','PPM1D', 'ASXL1'])]
+summary_copy = summary.copy()
+
+summary_copy['PreferredSymbol'] = 'ALL'
+filtered_df = pd.concat([filtered_df, summary_copy])
+
+filtered_df = filtered_df[filtered_df.overall_order<max_order]
+filtered_df = filtered_df.sort_values(by='PreferredSymbol')
+filtered_df = filtered_df[filtered_df.fitness<0.6]
+
+sns.boxplot(data=filtered_df, x='overall_order', y='fitness',
+            showfliers=False,
+            hue='PreferredSymbol')
+
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+
+mod = smf.ols(formula='fitness ~ scale(overall_order) + scale(clipped_init_age)', data=summary)
+res = mod.fit()
+print(res.summary())
 
 # %%

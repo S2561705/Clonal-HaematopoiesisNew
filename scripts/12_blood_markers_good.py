@@ -590,65 +590,67 @@ plt.savefig('../plots/Figure 2/long_associations.png', dpi=200, transparent=True
 plt.savefig('../plots/Figure 2/long_associations.svg', transparent=True)
 
 summary_table.to_csv('../results/blood_marker_table.csv')
-# %%
+# # %%
 
-for cohort in ['sardiNIA', 'LBC', 'WHI']:
+# for cohort in ['sardiNIA', 'LBC', 'WHI']:
 
-    data_analysis = data[data.obs.cohort.isin([cohort])].copy()
+#     data_analysis = data[data.obs.cohort.isin([cohort])].copy()
 
-    # For max_VAF_z_score
-    predictor_columns = ['max_VAF_z_score']
-    results_VAF, warnings_log_size = analyze_correlations(data_analysis, layer_classification, normality_results, predictor_columns)
+#     # For max_VAF_z_score
+#     predictor_columns = ['max_VAF_z_score']
+#     results_VAF, warnings_log_size = analyze_correlations(data_analysis, layer_classification, normality_results, predictor_columns)
 
-    print("Warnings encountered for max_VAF_z_score:")
-    for key, warning in warnings_log_size.items():
-        print(f"{key}: {warning}")
+#     print("Warnings encountered for max_VAF_z_score:")
+#     for key, warning in warnings_log_size.items():
+#         print(f"{key}: {warning}")
 
-    print(f"\nNumber of markers analyzed: {len(results_VAF)}")
-    print(f"Number of markers dropped due to warnings: {len(warnings_log_size)}")
+#     print(f"\nNumber of markers analyzed: {len(results_VAF)}")
+#     print(f"Number of markers dropped due to warnings: {len(warnings_log_size)}")
 
-    # Create summary table
-    summary_table_VAF = create_summary_table(results_VAF, predictor_columns)
-    plot_significant_interactions(summary_table_VAF)
+#     # Create summary table
+#     summary_table_VAF = create_summary_table(results_VAF, predictor_columns)
+#     plot_significant_interactions(summary_table_VAF)
 
-    # For max_size_prediction_120_z_score
-    predictor_columns = ['max_size_prediction_120_z_score']
-    results_size, warnings_log_size = analyze_correlations(data_analysis, layer_classification, normality_results, predictor_columns)
+#     # For max_size_prediction_120_z_score
+#     predictor_columns = ['max_size_prediction_120_z_score']
+#     results_size, warnings_log_size = analyze_correlations(data_analysis, layer_classification, normality_results, predictor_columns)
 
-    print("Warnings encountered for max_size_prediction_120_z_score:")
-    for key, warning in warnings_log_size.items():
-        print(f"{key}: {warning}")
+#     print("Warnings encountered for max_size_prediction_120_z_score:")
+#     for key, warning in warnings_log_size.items():
+#         print(f"{key}: {warning}")
 
-    print(f"\nNumber of markers analyzed: {len(results_size)}")
-    print(f"Number of markers dropped due to warnings: {len(warnings_log_size)}")
+#     print(f"\nNumber of markers analyzed: {len(results_size)}")
+#     print(f"Number of markers dropped due to warnings: {len(warnings_log_size)}")
 
-    # Create summary table
-    summary_table_size = create_summary_table(results_size, predictor_columns)
-    plot_significant_interactions(summary_table_size)
+#     # Create summary table
+#     summary_table_size = create_summary_table(results_size, predictor_columns)
+#     plot_significant_interactions(summary_table_size)
 
 
-    # For max_fitness_z_score
-    predictor_columns = ['max_fitness_z_score']
-    results_fitness, warnings_log_fitness = analyze_correlations(data_analysis, layer_classification, normality_results, predictor_columns)
+#     # For max_fitness_z_score
+#     predictor_columns = ['max_fitness_z_score']
+#     results_fitness, warnings_log_fitness = analyze_correlations(data_analysis, layer_classification, normality_results, predictor_columns)
 
-    print("\nWarnings encountered for max_fitness_z_score:")
-    for key, warning in warnings_log_fitness.items():
-        print(f"{key}: {warning}")
+#     print("\nWarnings encountered for max_fitness_z_score:")
+#     for key, warning in warnings_log_fitness.items():
+#         print(f"{key}: {warning}")
 
-    print(f"\nNumber of markers analyzed: {len(results_fitness)}")
-    print(f"Number of markers dropped due to warnings: {len(warnings_log_fitness)}")
+#     print(f"\nNumber of markers analyzed: {len(results_fitness)}")
+#     print(f"Number of markers dropped due to warnings: {len(warnings_log_fitness)}")
 
-    # Create summary table
-    summary_table_fitness = create_summary_table(results_fitness, predictor_columns)
+#     # Create summary table
+#     summary_table_fitness = create_summary_table(results_fitness, predictor_columns)
 
-    summary_table = pd.concat([summary_table_fitness, summary_table_size, summary_table_VAF])
-    plot_significant_interactions(summary_table, figsize=None)
-    plt.title(f'Associations in {cohort} cohort')
-    plt.savefig(f'../plots/Supp Figure 2/long_associations_{cohort}.png', dpi=200, bbox_inches='tight', transparent=True)
-    plt.savefig(f'../plots/Supp Figure 2/long_associations_{cohort}.svg', bbox_inches='tight', transparent=True)
+#     summary_table = pd.concat([summary_table_fitness, summary_table_size, summary_table_VAF])
+#     plot_significant_interactions(summary_table, figsize=None)
+#     plt.title(f'Associations in {cohort} cohort')
+#     plt.savefig(f'../plots/Supp Figure 2/long_associations_{cohort}.png', dpi=200, bbox_inches='tight', transparent=True)
+#     plt.savefig(f'../plots/Supp Figure 2/long_associations_{cohort}.svg', bbox_inches='tight', transparent=True)
 
-    summary_table.to_csv(f'../results/blood_marker_table_{cohort}.csv')
-# %%
+#     summary_table.to_csv(f'../results/blood_marker_table_{cohort}.csv')
+# # %%
+
+summary_table.sort_values(by='P-value')
 
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
@@ -691,3 +693,4 @@ plt.title('Lineplot with color based on max_VAF_fitness')
 # %%
 
 
+np.mean([part.shape[0] for part in cohort])

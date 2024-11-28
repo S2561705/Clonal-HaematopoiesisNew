@@ -69,8 +69,8 @@ def plot_normalized_kde(data, x=None, y=None, hue=None, ax=None, palette=None, *
             x_values = line.get_xdata()
             x_values = x_values / x_values.max()
             line.set_xdata(x_values)
-
-# Age vs Fitness
+# %%
+# Age vs MACS
 # Perform linear regression
 slope, intercept, r_value, p_value, std_err = stats.linregress(
     part_summary['age_wave_1'], part_summary['max_size_prediction_120_z_score'])
@@ -144,6 +144,82 @@ ax_main.text(x=60, y=0.3,  # Adjusted y position for new scale
 plt.savefig('../plots/Supp Figure 2/age_vs_MACS_scatter.png', 
             transparent=True, dpi=1000)
 plt.savefig('../plots/Supp Figure 2/age_vs_MACS_scatter.svg', transparent=True)
+
+# %%
+# Age vs Fitness
+# Perform linear regression
+slope, intercept, r_value, p_value, std_err = stats.linregress(
+    part_summary['age_wave_1'], part_summary['max_fitness_z_score'])
+
+# Calculate R-squared
+r_squared = r_value**2
+
+# Create main figure
+fig = plt.figure(figsize=(8,7))
+
+# Divide the figure into main and margin sections
+outer_gs = gridspec.GridSpec(2, 2, figure=fig,
+                           width_ratios=[6, 1],
+                           height_ratios=[1, 6],
+                           hspace=0.1, wspace=0.1)
+
+# Create main subplot and KDE subplots
+ax_kde_top = fig.add_subplot(outer_gs[0, 0])      # Top KDE
+ax_kde_right = fig.add_subplot(outer_gs[1, 1])    # Right KDE
+ax_main = fig.add_subplot(outer_gs[1, 0])         # Main scatter plot
+
+# Plot KDEs
+plot_normalized_kde(data=part_summary, x='age_wave_1', hue='cohort',
+                   palette=cohort_color_dict, ax=ax_kde_top)
+
+# Plot right KDE
+plot_normalized_kde(data=part_summary, y='max_fitness_z_score', hue='cohort',
+                   palette=cohort_color_dict, ax=ax_kde_right)
+
+# Plot scatter plot
+sns.scatterplot(data=part_summary, x='age_wave_1', y='max_fitness_z_score', 
+               hue='cohort', alpha=0.7, 
+               palette=cohort_color_dict, ax=ax_main)
+    
+sns.regplot(data=part_summary, x='age_wave_1', y='max_fitness_z_score',
+            scatter=False, order=1, color='tab:grey', ax=ax_main)
+
+# Style the top KDE
+ax_kde_top.set_xlim(48, 95)
+ax_kde_top.set_ylim(0.05, 1.05)
+ax_kde_top.set_ylabel('')
+ax_kde_top.set_xlabel('')
+ax_kde_top.tick_params(labelbottom=False, labelleft=False, left=False)
+sns.despine(ax=ax_kde_top, top=True, left=True, right=True)
+
+# Style the right KDE
+ax_kde_right.set_xlim(0.05, 1.05)
+ax_kde_right.set_ylim(-2.1, 2.5)  # Adjusted to show full range
+ax_kde_right.set_ylabel('')
+ax_kde_right.set_xlabel('')
+ax_kde_right.tick_params(labelbottom=False, labelleft=False, bottom=False)
+sns.despine(ax=ax_kde_right, top=True, right=True, bottom=True)
+
+# Style main plot
+ax_main.set_xlim(48, 95)
+ax_main.set_ylim(-2.1, 2.5)  # Adjusted to show full range
+ax_main.spines.right.set_visible(False)
+ax_main.spines.top.set_visible(False)
+ax_main.set_ylabel("Max Fitness (z-score)", fontsize=12)
+ax_main.set_xlabel("Age at first observation", fontsize=12)
+
+# Remove duplicate legend from main plot
+ax_main.legend(title='Cohort', bbox_to_anchor=(1.02, 1), loc='best')
+
+# Add R-squared and p-value to the plot
+ax_main.text(x=60, y=0.3,  # Adjusted y position for new scale
+             s=f'Max fitness vs Age (R² = {r_squared:.3f}, p = {p_value:.3e})',
+             fontsize=12,
+             color='tab:grey')
+
+plt.savefig('../plots/Supp Figure 2/age_vs_max_fitness_scatter.png', 
+            transparent=True, dpi=1000)
+plt.savefig('../plots/Supp Figure 2/age_vs_max_fitness_scatter.svg', transparent=True)
 
 # %%
 # Supp Figure 2B
@@ -293,3 +369,9 @@ def analyze_and_plot_anova(df):
 # Usage example:
 analyze_and_plot_anova(dead_df)
 # %%
+
+sns.regplot(grouped_df, y='fitness', x='clipped_init_age')
+# %%
+grouped_df = summary.groupby('PreferredSymbol').mean(numeric_only=True).sort_values(by='fitness')
+
+grouped_df[grouped_df.index=='U2AF1']

@@ -1,0 +1,33 @@
+name: CH_stat_annot
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python
+  - numpy
+  - pandas
+  - anndata == 0.10.8
+  - plotly
+  - matplotlib == 3.5.2
+  - python-kaleido
+  - scikit-learn
+  - statsmodels
+  - tqdm
+  - dill
+  - ipykernel
+  - nbformat
+  - openpyxl
+  - lifelines
+  - ipywidgets
+  - scipy<1.13
+  - seaborn
+  - pymc
+  - jax
+  - nutpie
+  - networkx[default]
+  - pyvis
+  - numba
+  - scikit-survival
+  - aesara
+  - adjusttext
+  - statannotations

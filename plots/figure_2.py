@@ -28,7 +28,7 @@ part_summary = part_summary.sort_values(by='cohort')
 survival_df = part_summary[part_summary['dead'].notna()].copy()
 ylabel_dict = {'max_VAF_z_score': 'Max VAF',
                'max_fitness_z_score':'Max Fitness',
-               'age_wave_1': 'Age',
+               'scale(age_wave_1)': 'Age',
                'Female': 'Sex',
                'max_size_prediction_120_z_score': 'MACS 120'}
 
@@ -79,7 +79,7 @@ cph = CoxPHFitter()
 cph.fit(survival_df, 
         duration_col='from_wave_1',
         event_col='dead',
-        formula="max_VAF_z_score + max_fitness_z_score + age_wave_1 + Female + max_size_prediction_120_z_score")
+        formula="max_VAF_z_score + max_fitness_z_score + scale(age_wave_1) + Female + max_size_prediction_120_z_score")
       #   formula="max_VAF_z_score + max_fitness_z_score + age_wave_1 + Female ")
       #   formula="max_VAF_z_score + max_size_prediction_120_z_score + age_wave_1 + Female ")
 
@@ -124,7 +124,7 @@ plt.clf()
 # %%
 
 for covariate in ['max_VAF_z_score', 'max_fitness_z_score',
-                   'age_wave_1', 'Female', 'max_size_prediction_120_z_score']:
+                   'scale(age_wave_1)', 'Female', 'max_size_prediction_120_z_score']:
 
     fig, ax = plt.subplots()
     # Define the fitness values you want to plot
@@ -168,9 +168,9 @@ for cohort in cohort_choice:
     normalise_parameter(cohort_data, 'max_size_prediction_next_30')
 
     if cohort == 'WHI':
-        formula = "max_VAF_z_score + max_fitness_z_score + age_wave_1 + max_size_prediction_120_z_score"
+        formula = "max_VAF_z_score + max_fitness_z_score + scale(age_wave_1) + max_size_prediction_120_z_score"
     else:
-        formula = "max_VAF_z_score + max_fitness_z_score + age_wave_1 + Female + max_size_prediction_120_z_score"
+        formula = "max_VAF_z_score + max_fitness_z_score + scale(age_wave_1) + Female + max_size_prediction_120_z_score"
     cph = CoxPHFitter()
     cph.fit(cohort_data, duration_col='from_wave_1', event_col='dead', 
             formula=formula)

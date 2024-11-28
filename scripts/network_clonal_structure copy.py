@@ -18,7 +18,7 @@ import networkx as nx
 
 min_edge = 1
 in_edge = True
-contains_gene = None
+contains_gene = 'DNMT3A'
 
 # Import results
 with open('../exports/all_processed_with_deterministic.pk', 'rb') as f:
@@ -99,6 +99,9 @@ for i in range(len(cs_df)):
                 edge_dict[sorted_comb].append(cs_log_fitness)
             else:
                 edge_dict[sorted_comb] = [cs_log_fitness]
+
+if contains_gene is not None:
+    edge_dict = {k:v for k,v in edge_dict.items() if contains_gene in k}
 
 for key, v in edge_dict.items():
     edge_dict[key] = (np.mean(v), len(v))

@@ -288,11 +288,11 @@ summary['log_fitness'] = np.log(summary.fitness)
 sns.scatterplot(summary, x='log_fitness', y='comp_vaf_diff')
 # %%
 
-
 part_df = summary.groupby(by='participant_id').max(numeric_only=True)
 mean_diff = part_df.comp_vaf_diff.mean()
 
 # %%
+
 fig, ax = plt.subplots()
 # sns.kdeplot(part_df, x='comp_vaf_diff', ax=ax )
 sns.histplot(part_df, x='comp_vaf_diff')
@@ -311,3 +311,113 @@ plt.yscale('log')
 sns.despine()
 plt.savefig('../plots/Figure 3/vaf_diff_histplot.svg')
 # %%
+
+gene_mask = summary.PreferredSymbol =='DNMT3A'
+gene_data = summary[gene_mask].copy()
+# gene_data[gene_data.clonal_structure_size == 1]
+
+# Create separate KDE plots for each mutation, normalize, then combine
+g = plt.figure()
+unique_mutations = gene_data['clonal_structure_size'].unique()
+
+for mutation in unique_mutations:
+    subset = gene_data[gene_data['clonal_structure_size'] == mutation]
+    
+    # Get KDE values
+    kde = stats.gaussian_kde(subset['fitness'])
+    x_range = np.linspace(gene_data['fitness'].min(), gene_data['fitness'].max(), 200)
+    kde_values = kde(x_range)
+    
+    # Normalize to maximum of 1
+    kde_values_normalized = kde_values / kde_values.max()
+    
+    # Plot normalized KDE
+    plt.plot(x_range, kde_values_normalized, label=str(mutation))
+
+sns.despine()
+plt.xlabel('Fitness')
+plt.ylabel('Normalized Density')
+plt.legend(title='Clonal Structure Size')
+# %%
+sns.regplot(gene_data , x='clonal_structure_size', y='fitness_z_score')
+sns.despine()
+
+# %%
+import statsmodels.formula.api as smf
+res = smf.ols(data =gene_data, formula='fitness_z_score ~ clonal_structure_size').fit()
+res.summary()
+# %%
+# Assuming cosmic_df and summary_filtered dataframes are already loaded
+fitness_threshold = 0.02
+gene_count_threshold = 1
+
+gene_counts = summary[summary.fitness > fitness_threshold].PreferredSymbol.value_counts()
+gene_keep = gene_counts[gene_counts > gene_count_threshold].index
+
+# summary_filtered
+summary_filtered = summary[(summary.fitness > fitness_threshold)
+                           & (summary.PreferredSymbol.isin(gene_keep))]
+
+
+grouped_gene = summary_filtered.groupby(by='PreferredSymbol').mean(numeric_only=True)
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+from adjustText import adjust_text
+
+
+# Age vs Fitness
+# Perform linear regression
+slope, intercept, r_value, p_value, std_err = stats.linregress(
+    grouped_gene['clipped_init_age'], grouped_gene['fitness'])
+
+# Calculate R-squared
+r_squared = r_value**2
+    # Create figure and axis
+fig, ax = plt.subplots(figsize=(7,7))
+    
+# Create scatter plot
+sns.scatterplot(data=grouped_gene, x='clipped_init_age', y='fitness')
+sns.regplot(data=grouped_gene, x='clipped_init_age', y='fitness',
+            color='orange', scatter=False)
+
+plt.xlim(-20,70)
+# Create list to store text objects
+texts = []
+
+# Add labels for each point
+for x, y, label in zip(grouped_gene['clipped_init_age'], grouped_gene['fitness'], grouped_gene.index):
+    texts.append(plt.text(x, y, label))
+
+# Adjust text positions to avoid overlap
+adjust_text(texts,
+            arrowprops=dict(arrowstyle='-', color='gray', lw=1),
+            expand_points=(1.5, 1.5),
+            prevent_crossings=True,
+            force_text=1,
+        #    expand_axes=True,
+            max_move=15,
+            force_points=(0.1, 0.1))
+
+# Customize plot
+plt.xlabel('clipped_init_age')
+plt.ylabel('fitness')
+sns.despine()
+
+# Add R-squared and p-value to the title
+ax.text(x=-10, y=0.35,
+                    s=f'Fitness vs Age (R² = {r_squared:.3f}, p = {p_value:.3e})',
+                    fontsize=12,
+                    color='tab:grey'
+                    )
+
+
+plt.ylabel('Fitness')
+plt.xlabel('ATMA')
+plt.savefig('../plots/Supp Figure 3/fitness_vs_ATMA_by_gene.svg')
+plt.savefig('../plots/Supp Figure 3/fitness_vs_ATMA_by_gene.png', transparent=True, dpi=200)
+plt.show()
+# %%
+
+slope, intercept, r_value, p_value, std_err = stats.linregress(
+    summary['clipped_init_age'], summary['fitness'])
