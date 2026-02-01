@@ -10,7 +10,7 @@ import plotly.express as px
 import pandas as pd
 import pickle
 
-with open('../exports/Uddin_processed_2024_04_02.pk', 'rb') as f:
+with open('../exports/MDS/MDS_cohort_fitted.pk', 'rb') as f:
     participant_list = pk.load(f)
 
 for part in participant_list:
@@ -51,7 +51,10 @@ G = nx.Graph()
 
 # %%
 # add nodes
-gene_dict = summary.Gene.value_counts().to_dict()
+print(summary.columns)
+
+gene_dict = summary['PreferredSymbol'].value_counts().to_dict()
+
 
 nodes = list(gene_dict.keys())
 node_sizes = list(gene_dict.values())

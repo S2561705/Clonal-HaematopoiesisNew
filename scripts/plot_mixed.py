@@ -22,8 +22,6 @@ plt.rcParams['font.size'] = 10
 CONFIG = {
     'input_file': '../exports/MDS/MDS_cohort_fitted_unified.pk',
     'output_dir': '../exports/MDS/figures/',
-    # 'input_file': '../exports/TEST/synthetic_test_cohort.pk',
-    # 'output_dir': '../exports/TEST/figures/',
     'show_plots': True,
     'save_plots': True
 }
@@ -112,14 +110,8 @@ def plot_fitness_posteriors(part, figsize=(12, 4)):
     return fig
 
 
-def plot_participant_comprehensive(part, figsize=(16, 10)):
-    """
-    Comprehensive single-page summary plot for a participant showing:
-    - VAF trajectories over time
-    - Fitness posteriors
-    - Clonal structure diagram
-    - Het/Hom composition
-    """
+def plot_vaf_trajectories(part, figsize=(10, 6)):
+    """Plot VAF trajectories with model fits"""
     if 'optimal_model' not in part.uns:
         print(f"No optimal model found")
         return None
@@ -127,11 +119,7 @@ def plot_participant_comprehensive(part, figsize=(16, 10)):
     participant_id = part.uns.get('participant_id', 'Unknown')
     model = part.uns['optimal_model']
     cs = model['clonal_structure']
-    posterior = model['posterior']
-    s_range = model['s_range']
     h_vec = model['h_vec']
-    het_frac = model.get('het_frac')
-    hom_frac = model.get('hom_frac')
     
     AO = part.layers['AO']
     DP = part.layers['DP']
@@ -141,251 +129,31 @@ def plot_participant_comprehensive(part, figsize=(16, 10)):
     n_clones = len(cs)
     colors = sns.color_palette("husl", n_clones)
     
-    # Create figure with custom layout
-    fig = plt.figure(figsize=figsize)
-    gs = GridSpec(3, 3, figure=fig, height_ratios=[2, 1.5, 1], hspace=0.3, wspace=0.3)
-    
-    # ==========================================================================
-    # 1. VAF Trajectories (top, spans 2 columns)
-    # ==========================================================================
-    ax_vaf = fig.add_subplot(gs[0, :2])
+    fig, ax = plt.subplots(figsize=figsize)
     
     for i, (clone_muts, h, color) in enumerate(zip(cs, h_vec, colors)):
         for mut_idx in clone_muts:
             vaf = VAF[mut_idx, :]
             mut_name = part.obs.index[mut_idx]
             
-            # Determine zygosity label
-            if h < 0.1:
-                zyg_label = 'Het'
-            elif h > 0.9:
-                zyg_label = 'Hom'
-            else:
-                zyg_label = f'Mix(h={h:.2f})'
-            
-            # Get fitness if available
-            if 'fitness' in part.obs:
-                fitness = part.obs['fitness'].iloc[mut_idx]
-                label = f'C{i+1}: {mut_name} [{zyg_label}, s={fitness:.2f}]'
-            else:
-                label = f'C{i+1}: {mut_name} [{zyg_label}]'
-            
             # Plot observed VAF
-            ax_vaf.plot(time_points, vaf, 'o-', color=color, 
-                       label=label, markersize=10, linewidth=2.5, alpha=0.8)
+            ax.plot(time_points, vaf, 'o-', color=color, 
+                   label=f'Clone {i+1}: {mut_name}', markersize=8, linewidth=2)
             
             # Add error bars based on binomial uncertainty
             depth = DP[mut_idx, :]
             vaf_std = np.sqrt(vaf * (1 - vaf) / depth)
-            ax_vaf.errorbar(time_points, vaf, yerr=1.96*vaf_std, 
-                           fmt='none', color=color, alpha=0.3, capsize=5, linewidth=1.5)
+            ax.errorbar(time_points, vaf, yerr=1.96*vaf_std, 
+                       fmt='none', color=color, alpha=0.3, capsize=5)
     
-    # Add reference lines
-    ax_vaf.axhline(0.5, color='gray', linestyle='--', linewidth=1, alpha=0.5, label='Het max (0.5)')
+    ax.set_xlabel('Time (years)', fontsize=12)
+    ax.set_ylabel('VAF', fontsize=12)
+    ax.set_title(f'VAF Trajectories: {participant_id}', fontsize=14, fontweight='bold')
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim([0, 1])
     
-    ax_vaf.set_xlabel('Time (years)', fontsize=12, fontweight='bold')
-    ax_vaf.set_ylabel('VAF', fontsize=12, fontweight='bold')
-    ax_vaf.set_title(f'{participant_id}: VAF Trajectories & Clonal Composition', 
-                     fontsize=14, fontweight='bold')
-    ax_vaf.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9, framealpha=0.9)
-    ax_vaf.grid(True, alpha=0.3)
-    ax_vaf.set_ylim([-0.05, 1.05])
-    
-    # ==========================================================================
-    # 2. Clonal Structure Diagram (top right)
-    # ==========================================================================
-    ax_structure = fig.add_subplot(gs[0, 2])
-    ax_structure.axis('off')
-    
-    # Create text-based clonal structure diagram
-    y_pos = 0.9
-    ax_structure.text(0.5, y_pos, 'Clonal Structure', 
-                     ha='center', va='top', fontsize=12, fontweight='bold',
-                     transform=ax_structure.transAxes)
-    y_pos -= 0.15
-    
-    for i, (clone_muts, h, color) in enumerate(zip(cs, h_vec, colors)):
-        # Clone box
-        mut_names = [part.obs.index[j] for j in clone_muts]
-        
-        # Zygosity
-        if h < 0.1:
-            zyg_str = 'Heterozygous'
-        elif h > 0.9:
-            zyg_str = 'Homozygous'
-        else:
-            zyg_str = f'Mixed (h={h:.2f})'
-        
-        # Fitness
-        if 'fitness' in part.obs and len(clone_muts) > 0:
-            fitness = part.obs['fitness'].iloc[clone_muts[0]]
-            if not np.isnan(fitness):
-                ci_low = part.obs['fitness_5'].iloc[clone_muts[0]]
-                ci_high = part.obs['fitness_95'].iloc[clone_muts[0]]
-                fitness_str = f's = {fitness:.2f} [{ci_low:.2f}-{ci_high:.2f}]'
-            else:
-                fitness_str = 's = N/A'
-        else:
-            fitness_str = ''
-        
-        # Draw box
-        box = plt.Rectangle((0.1, y_pos-0.15), 0.8, 0.12, 
-                           facecolor=color, alpha=0.3, edgecolor=color, linewidth=2,
-                           transform=ax_structure.transAxes)
-        ax_structure.add_patch(box)
-        
-        # Clone label
-        ax_structure.text(0.15, y_pos-0.03, f'Clone {i+1}', 
-                         fontsize=10, fontweight='bold', va='top',
-                         transform=ax_structure.transAxes)
-        
-        # Mutations
-        mut_text = ', '.join(mut_names[:2])
-        if len(mut_names) > 2:
-            mut_text += f' +{len(mut_names)-2}'
-        ax_structure.text(0.15, y_pos-0.07, mut_text, 
-                         fontsize=8, va='top', style='italic',
-                         transform=ax_structure.transAxes)
-        
-        # Zygosity and fitness
-        ax_structure.text(0.15, y_pos-0.11, f'{zyg_str} | {fitness_str}', 
-                         fontsize=8, va='top',
-                         transform=ax_structure.transAxes)
-        
-        y_pos -= 0.18
-    
-    ax_structure.set_xlim([0, 1])
-    ax_structure.set_ylim([0, 1])
-    
-    # ==========================================================================
-    # 3. Fitness Posteriors (middle row)
-    # ==========================================================================
-    for i, (clone_muts, h, color) in enumerate(zip(cs, h_vec, colors)):
-        ax_post = fig.add_subplot(gs[1, i])
-        
-        p = posterior[:, i]
-        if np.sum(p) > 0:
-            p = p / np.sum(p)  # Normalize
-            
-            # Plot posterior
-            ax_post.plot(s_range, p, linewidth=2.5, color=color)
-            ax_post.fill_between(s_range, p, alpha=0.3, color=color)
-            
-            # Mark MAP estimate
-            map_idx = np.argmax(p)
-            map_s = s_range[map_idx]
-            ax_post.axvline(map_s, color='red', linestyle='--', linewidth=2)
-            
-            # Add 95% CI shading
-            if 'fitness_5' in part.obs and len(clone_muts) > 0:
-                ci_low = part.obs['fitness_5'].iloc[clone_muts[0]]
-                ci_high = part.obs['fitness_95'].iloc[clone_muts[0]]
-                if not np.isnan(ci_low):
-                    ax_post.axvspan(ci_low, ci_high, alpha=0.2, color='red')
-        else:
-            ax_post.text(0.5, 0.5, 'No valid\nposterior', 
-                        ha='center', va='center', transform=ax_post.transAxes,
-                        fontsize=10, color='red')
-        
-        ax_post.set_xlabel('Fitness (s)', fontsize=10)
-        ax_post.set_ylabel('Posterior Density', fontsize=10)
-        ax_post.set_title(f'Clone {i+1} Fitness', fontsize=11, fontweight='bold')
-        ax_post.grid(True, alpha=0.3)
-        
-        # Remove extra axes if fewer clones
-        if i >= n_clones:
-            ax_post.axis('off')
-    
-    # Remove unused posterior axes
-    for i in range(n_clones, 3):
-        ax_empty = fig.add_subplot(gs[1, i])
-        ax_empty.axis('off')
-    
-    # ==========================================================================
-    # 4. Het/Hom Cell Composition (bottom row)
-    # ==========================================================================
-    if het_frac is not None and hom_frac is not None:
-        ax_comp = fig.add_subplot(gs[2, :2])
-        
-        width = 0.15
-        x_offset = np.arange(len(time_points))
-        
-        for i, (clone_muts, h, color) in enumerate(zip(cs, h_vec, colors)):
-            if len(clone_muts) == 0:
-                continue
-            
-            het_size = het_frac[:, clone_muts[0]]
-            hom_size = hom_frac[:, clone_muts[0]]
-            
-            x_pos = x_offset + i * width
-            
-            # Heterozygous cells (lighter shade)
-            ax_comp.bar(x_pos, het_size, width=width, 
-                       color=color, alpha=0.5, 
-                       label=f'Clone {i+1} Het' if i < n_clones else '')
-            
-            # Homozygous cells (darker shade, stacked)
-            ax_comp.bar(x_pos, hom_size, width=width, 
-                       bottom=het_size, color=color, alpha=1.0,
-                       label=f'Clone {i+1} Hom' if i < n_clones else '')
-        
-        ax_comp.set_xlabel('Time (years)', fontsize=12, fontweight='bold')
-        ax_comp.set_ylabel('Cell Count', fontsize=12, fontweight='bold')
-        ax_comp.set_title('Heterozygous vs Homozygous Cell Composition', 
-                         fontsize=12, fontweight='bold')
-        ax_comp.set_xticks(x_offset + width * (n_clones-1) / 2)
-        ax_comp.set_xticklabels([f'{t:.1f}' for t in time_points])
-        ax_comp.legend(ncol=2, fontsize=9, loc='upper left')
-        ax_comp.grid(True, alpha=0.3, axis='y')
-    
-    # ==========================================================================
-    # 5. Summary Statistics Table (bottom right)
-    # ==========================================================================
-    ax_table = fig.add_subplot(gs[2, 2])
-    ax_table.axis('off')
-    
-    # Gather summary statistics
-    table_data = []
-    table_data.append(['Participant:', participant_id])
-    table_data.append(['Mutations:', str(part.shape[0])])
-    table_data.append(['Timepoints:', str(len(time_points))])
-    table_data.append(['Time span:', f'{time_points.max()-time_points.min():.1f} years'])
-    table_data.append(['Median depth:', f'{np.median(DP):.0f}x'])
-    table_data.append(['VAF range:', f'{VAF.min():.2f}-{VAF.max():.2f}'])
-    table_data.append(['', ''])
-    table_data.append(['Clones:', str(n_clones)])
-    
-    # Zygosity counts
-    zyg_counts = {'Het': 0, 'Hom': 0, 'Mixed': 0}
-    for h in h_vec:
-        if h < 0.1:
-            zyg_counts['Het'] += 1
-        elif h > 0.9:
-            zyg_counts['Hom'] += 1
-        else:
-            zyg_counts['Mixed'] += 1
-    
-    table_data.append(['Het clones:', str(zyg_counts['Het'])])
-    table_data.append(['Hom clones:', str(zyg_counts['Hom'])])
-    table_data.append(['Mixed clones:', str(zyg_counts['Mixed'])])
-    
-    # Create table
-    table = ax_table.table(cellText=table_data, 
-                          cellLoc='left',
-                          loc='center',
-                          colWidths=[0.5, 0.5])
-    table.auto_set_font_size(False)
-    table.set_fontsize(9)
-    table.scale(1, 2)
-    
-    # Style header rows
-    for i in [0, 7]:
-        table[(i, 0)].set_facecolor('#E8E8E8')
-        table[(i, 1)].set_facecolor('#E8E8E8')
-    
-    fig.suptitle(f'Comprehensive Clonal Analysis: {participant_id}', 
-                fontsize=16, fontweight='bold', y=0.98)
-    
+    plt.tight_layout()
     return fig
 
 
@@ -638,20 +406,19 @@ def plot_all_results():
             print("  ⚠️ No optimal model found, skipping...")
             continue
         
-        # Comprehensive single-page plot
-        fig = plot_participant_comprehensive(part)
-        if fig and CONFIG['save_plots']:
-            filename = f"{CONFIG['output_dir']}{participant_id}_comprehensive.png"
-            fig.savefig(filename, bbox_inches='tight')
-            print(f"  ✅ Saved comprehensive plot")
-        
-        # Keep individual plots too if desired
         # Fitness posteriors
         fig = plot_fitness_posteriors(part)
         if fig and CONFIG['save_plots']:
             filename = f"{CONFIG['output_dir']}{participant_id}_fitness_posteriors.png"
             fig.savefig(filename, bbox_inches='tight')
             print(f"  ✅ Saved fitness posteriors")
+        
+        # VAF trajectories
+        fig = plot_vaf_trajectories(part)
+        if fig and CONFIG['save_plots']:
+            filename = f"{CONFIG['output_dir']}{participant_id}_vaf_trajectories.png"
+            fig.savefig(filename, bbox_inches='tight')
+            print(f"  ✅ Saved VAF trajectories")
         
         # Clone sizes
         fig = plot_clone_sizes(part)
