@@ -1,6 +1,7 @@
 """
 Standalone plotting script for MDS clonal evolution results.
 Generates comprehensive single-page summaries for each participant.
+UPDATED: Now shows actual h MAP and CI values in the table.
 """
 
 import pickle as pk
@@ -38,7 +39,7 @@ def plot_participant_comprehensive(part, figsize=(14, 8)):
     Simplified comprehensive plot showing:
     - VAF trajectories over time with mutation labels
     - Clonal structure
-    - Fitness estimates
+    - Fitness estimates with zygosity MAP and CI
     """
     if 'optimal_model' not in part.uns:
         print(f"  No optimal model found")
@@ -128,7 +129,7 @@ def plot_participant_comprehensive(part, figsize=(14, 8)):
     for i, (clone_muts, h, color) in enumerate(zip(cs, h_vec, colors)):
         mut_names = [part.obs.index[j] for j in clone_muts]
         
-        # Zygosity
+        # Zygosity interpretation
         if h < 0.1:
             zyg_str = 'Heterozygous'
         elif h > 0.9:
@@ -169,14 +170,17 @@ def plot_participant_comprehensive(part, figsize=(14, 8)):
     ax_structure.set_ylim([0, 1])
     
     # ==========================================================================
-    # 3. Fitness Estimates (bottom, spans both columns)
+    # 3. Fitness Estimates with Zygosity MAP and CI (bottom, spans both columns)
     # ==========================================================================
     ax_fitness = fig.add_subplot(gs[1, :])
     ax_fitness.axis('off')
     
-    # Create fitness table
+    # Create fitness table with zygosity MAP and CI
     fitness_data = []
-    fitness_data.append(['Clone', 'Mutations', 'Zygosity', 'Fitness (s)', '95% CI'])
+    fitness_data.append(['Clone', 'Mutations', 'h (MAP)', 'h (90% CI)', 's (MAP)', 's (90% CI)'])
+    
+    # Get joint_inference results if available
+    joint_inference = model.get('joint_inference', None)
     
     for i, (clone_muts, h, color) in enumerate(zip(cs, h_vec, colors)):
         mut_names = [part.obs.index[j] for j in clone_muts]
@@ -184,53 +188,65 @@ def plot_participant_comprehensive(part, figsize=(14, 8)):
         if len(mut_names) > 3:
             mut_str += f' +{len(mut_names)-3}'
         
-        # Zygosity
-        if h < 0.1:
-            zyg_str = 'Het'
-        elif h > 0.9:
-            zyg_str = 'Hom'
-        else:
-            zyg_str = f'Mix(h={h:.2f})'
+        # Zygosity MAP
+        h_map_str = f'{h:.3f}'
         
-        # Fitness
+        # Zygosity CI
+        if joint_inference is not None and i < len(joint_inference):
+            result = joint_inference[i]
+            if 'h_ci' in result:
+                h_ci_low, h_ci_high = result['h_ci']
+                h_ci_str = f'[{h_ci_low:.3f}, {h_ci_high:.3f}]'
+            else:
+                h_ci_str = 'N/A'
+        else:
+            h_ci_str = 'N/A'
+        
+        # Fitness MAP
         if 'fitness' in part.obs and len(clone_muts) > 0:
             fitness = part.obs['fitness'].iloc[clone_muts[0]]
             if not np.isnan(fitness):
-                ci_low = part.obs['fitness_5'].iloc[clone_muts[0]]
-                ci_high = part.obs['fitness_95'].iloc[clone_muts[0]]
-                fitness_str = f'{fitness:.3f}'
-                ci_str = f'[{ci_low:.3f}, {ci_high:.3f}]'
+                s_map_str = f'{fitness:.3f}'
             else:
-                fitness_str = 'N/A'
-                ci_str = 'N/A'
+                s_map_str = 'N/A'
         else:
-            fitness_str = 'N/A'
-            ci_str = 'N/A'
+            s_map_str = 'N/A'
         
-        fitness_data.append([f'Clone {i+1}', mut_str, zyg_str, fitness_str, ci_str])
+        # Fitness CI
+        if 'fitness_5' in part.obs and 'fitness_95' in part.obs and len(clone_muts) > 0:
+            ci_low = part.obs['fitness_5'].iloc[clone_muts[0]]
+            ci_high = part.obs['fitness_95'].iloc[clone_muts[0]]
+            if not (np.isnan(ci_low) or np.isnan(ci_high)):
+                s_ci_str = f'[{ci_low:.3f}, {ci_high:.3f}]'
+            else:
+                s_ci_str = 'N/A'
+        else:
+            s_ci_str = 'N/A'
+        
+        fitness_data.append([f'Clone {i+1}', mut_str, h_map_str, h_ci_str, s_map_str, s_ci_str])
     
     # Create table
     table = ax_fitness.table(cellText=fitness_data, 
                             cellLoc='left',
                             loc='center',
-                            colWidths=[0.1, 0.4, 0.15, 0.15, 0.2])
+                            colWidths=[0.08, 0.30, 0.10, 0.18, 0.10, 0.18])
     table.auto_set_font_size(False)
-    table.set_fontsize(11)
+    table.set_fontsize(10)
     table.scale(1, 2.5)
     
     # Style header
-    for j in range(5):
+    for j in range(6):
         table[(0, j)].set_facecolor('#4472C4')
         table[(0, j)].set_text_props(weight='bold', color='white')
     
     # Color code rows by clone
     for i, color in enumerate(colors[:len(cs)], start=1):
-        for j in range(5):
+        for j in range(6):
             table[(i, j)].set_facecolor(tuple(list(color) + [0.2]))
             table[(i, j)].set_edgecolor(color)
             table[(i, j)].set_linewidth(2)
     
-    ax_fitness.text(0.5, 0.95, 'Fitness Estimates', 
+    ax_fitness.text(0.5, 0.95, 'Parameter Estimates', 
                    ha='center', va='top', fontsize=14, fontweight='bold',
                    transform=ax_fitness.transAxes)
     
@@ -248,7 +264,7 @@ def plot_participant_comprehensive(part, figsize=(14, 8)):
 
 def main():
     print("="*80)
-    print("MDS CLONAL EVOLUTION PLOTTING")
+    print("MDS CLONAL EVOLUTION PLOTTING (WITH h MAP AND CI)")
     print("="*80)
     
     # Load data
@@ -294,6 +310,8 @@ def main():
                 
         except Exception as e:
             print(f"  ❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
             failed += 1
             continue
     

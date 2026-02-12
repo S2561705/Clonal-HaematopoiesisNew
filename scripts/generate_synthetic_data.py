@@ -1,452 +1,575 @@
+"""
+Synthetic Data Generator for Clonal Evolution Inference Testing
+IMPROVED VERSION: Longer follow-up and more timepoints to test saturation
+
+Generates synthetic participants with known ground truth:
+- One mutation per patient
+- Variable zygosity (heterozygous, homozygous, or mixed)
+- Known fitness values
+- Long follow-up to reach VAF saturation
+- High sequencing depth for clear signal
+- Realistic sequencing noise (binomial sampling)
+
+Ground truth is saved alongside synthetic data for validation.
+"""
+
 import numpy as np
 import pandas as pd
-from scipy.stats import binom, nbinom
-import matplotlib.pyplot as plt
-import seaborn as sns
+import anndata as ad
+import pickle as pk
+from pathlib import Path
 
-def generate_synthetic_clonal_data(
-    n_clones=2,
-    n_mutations_per_clone=1,  # Changed default to 1
-    n_timepoints=5,
-    time_points=None,
-    fitness_values=None,
-    N_w=1e5,
-    lamb=1.3,
-    depth_mean=100,
-    depth_std=20,
-    seed=42,
-    plot_during_generation=True  # New parameter
-):
+# ==============================================================================
+# Configuration - IMPROVED FOR SATURATION TESTING
+# ==============================================================================
+
+# Output
+OUTPUT_DIR = '../exports/synthetic/'
+OUTPUT_FILE = 'synthetic_single_mutation_cohort.pk'
+GROUND_TRUTH_FILE = 'synthetic_ground_truth.csv'
+
+# Cohort parameters
+N_PARTICIPANTS = 30  # Total number of synthetic participants
+N_TIMEPOINTS_RANGE = (6, 10)  # MORE timepoints to capture saturation dynamics
+TIME_SPAN_RANGE = (8.0, 20.0)  # LONGER follow-up to reach saturation
+
+# Population parameters
+N_WILDTYPE = 1e5  # Wild-type cell population size
+
+# Mutation parameters - one per participant
+FITNESS_RANGE = (0.3, 0.9)  # Moderate to high fitness for saturation
+INITIAL_SIZE_RANGE = (1000, 5000)  # Larger initial sizes for better visibility
+
+# Zygosity distribution (probabilities)
+ZYGOSITY_PROBS = {
+    'heterozygous': 0.35,   # h = 0 (purely het) - saturates at ~0.25
+    'homozygous': 0.35,     # h = 1 (purely hom) - saturates at ~0.50
+    'mixed': 0.30           # h = random in (0.3, 0.7) - saturates in between
+}
+
+# Sequencing parameters - VERY HIGH DEPTH for clear signal
+SEQUENCING_DEPTH_MEAN = 10000  # 100,000x depth  
+SEQUENCING_DEPTH_STD = 1000
+MIN_DEPTH = 5000  # Minimum 50,000x for low noise
+
+# Birth-death process
+LAMBDA = 1.3  # Birth rate
+
+# Random seed
+RANDOM_SEED = 42
+
+# ==============================================================================
+# Helper Functions
+# ==============================================================================
+
+def simulate_BD_process(N0, s, time, lamb=LAMBDA, n_steps=1000):
     """
-    Generate synthetic clonal evolution data with known ground truth.
+    Simulate birth-death process using Euler-Maruyama approximation.
     
     Parameters:
     -----------
-    n_clones : int
-        Number of clones
-    n_mutations_per_clone : int or list
-        Number of mutations per clone (if int, same for all clones)
-    n_timepoints : int
-        Number of sampling timepoints
-    time_points : array-like, optional
-        Specific timepoints (default: evenly spaced from 0 to 10)
-    fitness_values : array-like, optional
-        Fitness values for each clone (default: random between 0.1 and 0.8)
-    N_w : float
-        Wild-type population size
+    N0 : float
+        Initial population size
+    s : float
+        Fitness (selection coefficient)
+    time : float
+        Time duration (years)
     lamb : float
-        Birth rate parameter
-    depth_mean : int
-        Mean sequencing depth
-    depth_std : int
-        Standard deviation of sequencing depth
-    seed : int
-        Random seed for reproducibility
+        Birth rate
+    n_steps : int
+        Number of simulation steps
         
     Returns:
     --------
-    dict with keys:
-        - 'AO': Alternate allele observations (n_timepoints x n_mutations)
-        - 'DP': Total depth (n_timepoints x n_mutations)
-        - 'time_points': Timepoints array
-        - 'ground_truth': Dict with true values (clonal_structure, fitness, sizes)
+    N_final : float
+        Final population size
+    """
+    dt = time / n_steps
+    N = N0
+    
+    for _ in range(n_steps):
+        # Deterministic drift
+        mean_change = N * s * dt
+        
+        # Stochastic diffusion
+        variance = N * (2 * lamb + s) * dt
+        if variance > 0:
+            noise = np.random.normal(0, np.sqrt(variance))
+        else:
+            noise = 0
+        
+        # Update
+        N = N + mean_change + noise
+        
+        # Ensure non-negative
+        N = max(N, 0)
+        
+        # Extinction check
+        if N < 1:
+            return 0.0
+    
+    return N
+
+
+def compute_vaf(N_het, N_hom, N_wildtype):
+    """
+    Compute variant allele frequency.
+    
+    VAF = (N_het + 2*N_hom) / (2 * (N_wildtype + N_het + N_hom))
+    
+    Parameters:
+    -----------
+    N_het : float
+        Number of heterozygous mutant cells
+    N_hom : float
+        Number of homozygous mutant cells
+    N_wildtype : float
+        Number of wildtype cells
+        
+    Returns:
+    --------
+    vaf : float
+        Variant allele frequency [0, 1]
+    """
+    N_total = N_wildtype + N_het + N_hom
+    if N_total == 0:
+        return 0.0
+    
+    vaf = (N_het + 2 * N_hom) / (2 * N_total)
+    return np.clip(vaf, 0, 1)
+
+
+def sample_sequencing(vaf, depth):
+    """
+    Sample alternate allele counts from binomial distribution.
+    
+    Parameters:
+    -----------
+    vaf : float
+        True variant allele frequency
+    depth : int
+        Sequencing depth
+        
+    Returns:
+    --------
+    ao : int
+        Alternate allele count
+    dp : int
+        Total depth
+    """
+    dp = max(int(depth), MIN_DEPTH)
+    ao = np.random.binomial(dp, vaf)
+    return ao, dp
+
+
+def generate_timepoints(n_timepoints, time_span):
+    """
+    Generate timepoints with more density early on, but still covering late saturation.
+    
+    Parameters:
+    -----------
+    n_timepoints : int
+        Number of timepoints
+    time_span : float
+        Total time span (years)
+        
+    Returns:
+    --------
+    timepoints : array
+        Timepoints in years
+    """
+    # Use mixed spacing: early dense, late sparse
+    # First half: square root spacing (more early points)
+    # Second half: linear spacing
+    mid_point = n_timepoints // 2
+    
+    early_times = np.linspace(0, np.sqrt(time_span/2), mid_point) ** 2
+    late_times = np.linspace(time_span/2, time_span, n_timepoints - mid_point + 1)[1:]
+    
+    timepoints = np.concatenate([early_times, late_times])
+    return timepoints[:n_timepoints]
+
+
+# ==============================================================================
+# Main Synthetic Data Generation
+# ==============================================================================
+
+def generate_synthetic_participant(participant_id, zygosity_type=None):
+    """
+    Generate a single synthetic participant with one mutation.
+    
+    Parameters:
+    -----------
+    participant_id : str
+        Participant identifier
+    zygosity_type : str, optional
+        'heterozygous', 'homozygous', or 'mixed'
+        If None, randomly sample based on ZYGOSITY_PROBS
+        
+    Returns:
+    --------
+    part : AnnData
+        Synthetic participant data
+    ground_truth : dict
+        Ground truth parameters
     """
     
-    np.random.seed(seed)
+    # Sample zygosity type if not specified
+    if zygosity_type is None:
+        zygosity_type = np.random.choice(
+            list(ZYGOSITY_PROBS.keys()),
+            p=list(ZYGOSITY_PROBS.values())
+        )
     
-    # Setup timepoints
-    if time_points is None:
-        time_points = np.linspace(0, 10, n_timepoints)
+    # Sample zygosity parameter h
+    if zygosity_type == 'heterozygous':
+        h_true = 0.0
+    elif zygosity_type == 'homozygous':
+        h_true = 1.0
+    else:  # mixed
+        h_true = np.random.uniform(0.3, 0.7)  # Tighter range for clearer signal
+    
+    # Sample fitness
+    s_true = np.random.uniform(*FITNESS_RANGE)
+    
+    # Sample initial clone size
+    N0_total = np.random.uniform(*INITIAL_SIZE_RANGE)
+    
+    # Split into het and hom based on h
+    N0_hom = N0_total * h_true
+    N0_het = N0_total * (1 - h_true)
+    
+    # Sample timepoints
+    n_timepoints = np.random.randint(*N_TIMEPOINTS_RANGE)
+    time_span = np.random.uniform(*TIME_SPAN_RANGE)
+    timepoints = generate_timepoints(n_timepoints, time_span)
+    
+    # Simulate clone evolution
+    N_het_trajectory = np.zeros(n_timepoints)
+    N_hom_trajectory = np.zeros(n_timepoints)
+    vaf_true_trajectory = np.zeros(n_timepoints)
+    
+    for i, t in enumerate(timepoints):
+        if i == 0:
+            # Initial timepoint
+            N_het_trajectory[i] = N0_het
+            N_hom_trajectory[i] = N0_hom
+        else:
+            # Simulate growth from previous timepoint
+            delta_t = timepoints[i] - timepoints[i-1]
+            
+            N_het_trajectory[i] = simulate_BD_process(
+                N_het_trajectory[i-1], s_true, delta_t
+            )
+            N_hom_trajectory[i] = simulate_BD_process(
+                N_hom_trajectory[i-1], s_true, delta_t
+            )
+        
+        # Compute true VAF
+        vaf_true_trajectory[i] = compute_vaf(
+            N_het_trajectory[i], 
+            N_hom_trajectory[i],
+            N_WILDTYPE
+        )
+    
+    # Sample sequencing data
+    AO = np.zeros(n_timepoints, dtype=int)
+    DP = np.zeros(n_timepoints, dtype=int)
+    
+    for i in range(n_timepoints):
+        # Sample sequencing depth
+        depth = np.random.normal(
+            SEQUENCING_DEPTH_MEAN, 
+            SEQUENCING_DEPTH_STD
+        )
+        
+        # Sample reads
+        AO[i], DP[i] = sample_sequencing(vaf_true_trajectory[i], depth)
+    
+    # Create AnnData object
+    # Structure: mutations (obs) x timepoints (var)
+    obs = pd.DataFrame({
+        'mutation_id': ['MUT1'],
+        'gene': ['GENE1'],
+        'p_key': ['p.Arg100Cys']
+    })
+    obs.index = obs['mutation_id']
+    
+    var = pd.DataFrame({
+        'timepoint': np.arange(n_timepoints),
+        'time_points': timepoints
+    })
+    var.index = [f'T{i}' for i in range(n_timepoints)]
+    
+    # Main data matrix (VAF for compatibility, though not used directly)
+    X = (AO / np.maximum(DP, 1)).reshape(1, -1)
+    
+    # Create AnnData
+    part = ad.AnnData(
+        X=X,
+        obs=obs,
+        var=var
+    )
+    
+    # Add layers
+    part.layers['AO'] = AO.reshape(1, -1)
+    part.layers['DP'] = DP.reshape(1, -1)
+    
+    # Add metadata
+    part.uns['participant_id'] = participant_id
+    part.uns['cohort'] = 'SYNTHETIC'
+    
+    # Check if saturated (VAF plateaued)
+    if len(vaf_true_trajectory) >= 3:
+        late_growth = vaf_true_trajectory[-1] - vaf_true_trajectory[-3]
+        is_saturated = late_growth < 0.05
     else:
-        n_timepoints = len(time_points)
-        
-    # Setup mutations per clone
-    if isinstance(n_mutations_per_clone, int):
-        mutations_per_clone = [n_mutations_per_clone] * n_clones
-    else:
-        mutations_per_clone = n_mutations_per_clone
-        
-    n_mutations = sum(mutations_per_clone)
+        is_saturated = False
     
-    # Setup fitness values
-    if fitness_values is None:
-        fitness_values = np.random.uniform(0.1, 0.8, n_clones)
-    else:
-        fitness_values = np.array(fitness_values)
-        
-    # Create clonal structure
-    clonal_structure = []
-    mut_idx = 0
-    for n_mut in mutations_per_clone:
-        clonal_structure.append(list(range(mut_idx, mut_idx + n_mut)))
-        mut_idx += n_mut
-        
-    print(f"Ground truth clonal structure: {clonal_structure}")
-    print(f"Ground truth fitness values: {fitness_values}")
+    # Theoretical saturation point
+    theoretical_max_vaf = (1 - h_true) * 0.25 + h_true * 0.5  # Weighted by h
     
-    # Initialize arrays
-    AO = np.zeros((n_timepoints, n_mutations))
-    DP = np.zeros((n_timepoints, n_mutations))
-    
-    # Track true clone sizes over time
-    clone_sizes = np.zeros((n_timepoints, n_clones))
-    mutation_sizes_het = np.zeros((n_timepoints, n_mutations))
-    mutation_sizes_hom = np.zeros((n_timepoints, n_mutations))
-    
-    # Generate initial clone sizes (larger starting populations)
-    # Start with 1-5% of wild-type population
-    initial_sizes = np.random.uniform(N_w * 0.01, N_w * 0.05, n_clones)
-    clone_sizes[0] = initial_sizes
-    
-    print(f"  Initial clone sizes: {initial_sizes}")
-    
-    # Simulate clone growth over time using birth-death process
-    for t in range(1, n_timepoints):
-        dt = time_points[t] - time_points[t-1]
-        
-        for c in range(n_clones):
-            s = fitness_values[c]
-            prev_size = clone_sizes[t-1, c]
-            
-            # Mean and variance of birth-death process
-            exp_term = np.exp(dt * s)
-            mean = prev_size * exp_term
-            
-            # Add more variance for realistic stochasticity
-            variance = prev_size * (2*lamb + s) * exp_term * (exp_term - 1) / max(s, 1e-8)
-            variance = max(variance, mean * 1.5)  # Ensure sufficient variance
-            
-            # Ensure valid negative binomial parameters
-            if variance <= mean:
-                variance = mean * 2.0
-                
-            # Negative binomial parameters
-            p = mean / variance
-            n = mean**2 / max(variance - mean, 1e-8)
-            
-            # Sample new size
-            new_size = nbinom.rvs(n=n, p=p)
-            # Ensure growth (with some minimum)
-            new_size = max(new_size, prev_size * 0.8)  # Don't shrink too much
-            clone_sizes[t, c] = new_size
-    
-    print(f"  Final clone sizes: {clone_sizes[-1]}")
-    
-    # Assign mutations to het/hom randomly (with bias toward het)
-    het_prob = 0.7  # 70% chance of heterozygous
-    mutation_zygosity = np.random.choice(['het', 'hom'], size=n_mutations, p=[het_prob, 1-het_prob])
-    
-    # Create mutation names early (needed for diagnostics)
-    mutation_names = []
-    for c, clone_muts in enumerate(clonal_structure):
-        for i, m in enumerate(clone_muts):
-            mutation_names.append(f"Clone{c}_Mut{i}")
-    
-    # For each mutation, determine its size based on clone size
-    mut_idx = 0
-    for c, clone_muts in enumerate(clonal_structure):
-        for m in clone_muts:
-            # Mutation size is close to full clone size (with small noise)
-            fraction = np.random.uniform(0.9, 1.0)  # 90-100% of clone carries mutation
-            
-            for t in range(n_timepoints):
-                total_mut_size = clone_sizes[t, c] * fraction
-                
-                if mutation_zygosity[m] == 'het':
-                    mutation_sizes_het[t, m] = total_mut_size
-                    mutation_sizes_hom[t, m] = 0
-                else:
-                    mutation_sizes_het[t, m] = 0
-                    mutation_sizes_hom[t, m] = total_mut_size
-    
-    # Calculate true VAFs and generate sequencing observations
-    # Adjust N_w to ensure VAFs are in reasonable range
-    total_cells = N_w + clone_sizes.sum(axis=1)
-    
-    print(f"  Total cells over time: {total_cells}")
-    print(f"  Wild-type fraction: {(N_w / total_cells).round(3)}")
-    
-    for t in range(n_timepoints):
-        for m in range(n_mutations):
-            # True VAF calculation  
-            numerator = mutation_sizes_het[t, m] + 2 * mutation_sizes_hom[t, m]
-            denominator = 2 * (N_w + mutation_sizes_het[t, m] + mutation_sizes_hom[t, m])
-            true_vaf = numerator / denominator if denominator > 0 else 0
-            
-            # Clip VAF to valid range
-            true_vaf = np.clip(true_vaf, 0.001, 0.999)
-            
-            # Sample sequencing depth (higher for later timepoints = better data)
-            depth_mean_t = depth_mean + t * 20  # Increase depth over time
-            depth = int(np.random.normal(depth_mean_t, depth_std))
-            depth = max(depth, 50)  # Ensure minimum depth
-            
-            # Sample alternate allele count
-            alt_count = binom.rvs(n=depth, p=true_vaf)
-            
-            AO[t, m] = alt_count
-            DP[t, m] = depth
-    
-    # Print VAF ranges for diagnostics
-    VAF_check = AO / DP
-    print(f"  VAF ranges:")
-    for m, mut_name in enumerate(mutation_names):
-        vaf_range = VAF_check[:, m]
-        print(f"    {mut_name}: [{vaf_range.min():.3f}, {vaf_range.max():.3f}]")
-        if vaf_range.max() < 0.01:
-            print(f"      ⚠️  WARNING: Very low VAFs - may cause numerical issues")
-    
-    # Plot VAFs immediately if requested
-    if plot_during_generation:
-        print("\n  📊 Plotting VAFs during generation...")
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-        
-        # Plot 1: VAF trajectories
-        ax = axes[0]
-        colors = plt.cm.tab10(np.linspace(0, 1, n_mutations))
-        for m, mut_name in enumerate(mutation_names):
-            vaf_trajectory = VAF_check[:, m]
-            ax.plot(time_points, vaf_trajectory, 'o-', 
-                   label=mut_name, color=colors[m], 
-                   linewidth=2, markersize=8, alpha=0.8)
-        
-        ax.set_xlabel('Time', fontsize=12, fontweight='bold')
-        ax.set_ylabel('VAF', fontsize=12, fontweight='bold')
-        ax.set_title('Generated VAF Trajectories', fontsize=14, fontweight='bold')
-        ax.legend(fontsize=10)
-        ax.grid(True, alpha=0.3)
-        ax.set_ylim(bottom=0)
-        
-        # Plot 2: Clone sizes
-        ax = axes[1]
-        for c in range(n_clones):
-            ax.plot(time_points, clone_sizes[:, c], 's-',
-                   label=f'Clone {c} (s={fitness_values[c]:.2f})',
-                   linewidth=2, markersize=8, alpha=0.8)
-        
-        ax.set_xlabel('Time', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Clone Size (cells)', fontsize=12, fontweight='bold')
-        ax.set_title('True Clone Sizes', fontsize=14, fontweight='bold')
-        ax.legend(fontsize=10)
-        ax.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        plt.savefig('generation_vaf_plot.png', dpi=150, bbox_inches='tight')
-        plt.show(block=False)
-        plt.pause(0.1)
-        print(f"    ✓ Saved: generation_vaf_plot.png")
-        print(f"    ✓ Plot displayed (close to continue)")
-        plt.close()
-    
-    # Package results
+    # Ground truth
     ground_truth = {
-        'clonal_structure': clonal_structure,
-        'fitness_values': fitness_values,
-        'clone_sizes': clone_sizes,
-        'mutation_sizes_het': mutation_sizes_het,
-        'mutation_sizes_hom': mutation_sizes_hom,
-        'mutation_zygosity': mutation_zygosity,
-        'mutation_names': mutation_names,  # Already created above
-        'total_cells': total_cells
+        'participant_id': participant_id,
+        'n_timepoints': n_timepoints,
+        'time_span': time_span,
+        'zygosity_type': zygosity_type,
+        'h_true': h_true,
+        's_true': s_true,
+        'N0_total': N0_total,
+        'N0_het': N0_het,
+        'N0_hom': N0_hom,
+        'N_het_final': N_het_trajectory[-1],
+        'N_hom_final': N_hom_trajectory[-1],
+        'vaf_initial': vaf_true_trajectory[0],
+        'vaf_final': vaf_true_trajectory[-1],
+        'vaf_max': vaf_true_trajectory.max(),
+        'theoretical_max_vaf': theoretical_max_vaf,
+        'is_saturated': is_saturated,
+        'mean_depth': DP.mean(),
+        'clonal_structure': [[0]]  # Single mutation
     }
     
-    data = {
-        'AO': AO,
-        'DP': DP,
-        'time_points': time_points,
-        'ground_truth': ground_truth
-    }
-    
-    return data
+    return part, ground_truth
 
 
-def create_anndata_from_synthetic(synthetic_data):
+def generate_synthetic_cohort():
     """
-    Convert synthetic data to AnnData-like structure expected by the inference script.
+    Generate full synthetic cohort with balanced zygosity types.
     
-    Returns a mock object with the same interface as AnnData
+    Returns:
+    --------
+    cohort : list of AnnData
+        Synthetic participant data
+    ground_truth_df : DataFrame
+        Ground truth parameters for all participants
     """
-    class MockAnnData:
-        def __init__(self, AO, DP, time_points, mutation_names):
-            # IMPORTANT: X should be (n_mutations × n_timepoints) for compatibility
-            # Your inference code expects mutations as rows, timepoints as columns
-            VAF = AO / DP
-            self.X = VAF.T  # Transpose! Should be (n_mutations, n_timepoints)
-            
-            # Observations (mutations) - one row per mutation
-            self.obs = pd.DataFrame({
-                'p_key': mutation_names
-            }, index=mutation_names)
-            
-            # Variables (timepoints) - one row per timepoint
-            self.var = pd.DataFrame({
-                'time_points': time_points
-            }, index=[f'T{i}' for i in range(len(time_points))])
-            
-            # Layers for raw counts - also (n_mutations × n_timepoints)
-            self.layers = {
-                'AO': pd.DataFrame(AO.T, index=mutation_names, 
-                                  columns=[f'T{i}' for i in range(len(time_points))]),
-                'DP': pd.DataFrame(DP.T, index=mutation_names,
-                                  columns=[f'T{i}' for i in range(len(time_points))])
-            }
-            
-            # Unstructured data
-            self.uns = {}
-            
-            # Shape as property (not method!) - (n_mutations, n_timepoints)
-            self.shape = self.X.shape
-            
-        def __getitem__(self, idx):
-            # Simple indexing support
-            new_obj = MockAnnData.__new__(MockAnnData)
-            if isinstance(idx, int):
-                new_obj.X = self.X[[idx], :]
-                new_obj.obs = self.obs.iloc[[idx]]
-            else:
-                new_obj.X = self.X
-                new_obj.obs = self.obs
-            new_obj.var = self.var
-            new_obj.layers = self.layers
-            new_obj.uns = self.uns
-            new_obj.shape = new_obj.X.shape
-            return new_obj
     
-    gt = synthetic_data['ground_truth']
+    np.random.seed(RANDOM_SEED)
     
-    part = MockAnnData(
-        synthetic_data['AO'],
-        synthetic_data['DP'],
-        synthetic_data['time_points'],
-        gt['mutation_names']
+    print("="*80)
+    print("SYNTHETIC DATA GENERATION - SATURATION TESTING VERSION")
+    print("="*80)
+    print(f"\nConfiguration:")
+    print(f"  Participants: {N_PARTICIPANTS}")
+    print(f"  Timepoints per participant: {N_TIMEPOINTS_RANGE}")
+    print(f"  Time span: {TIME_SPAN_RANGE} years (LONG for saturation)")
+    print(f"  Fitness range: {FITNESS_RANGE}")
+    print(f"  Sequencing depth: {SEQUENCING_DEPTH_MEAN}±{SEQUENCING_DEPTH_STD} (HIGH)")
+    print(f"  Zygosity distribution: {ZYGOSITY_PROBS}")
+    print(f"  Random seed: {RANDOM_SEED}")
+    print()
+    
+    # Determine zygosity types to ensure balanced distribution
+    n_het = int(N_PARTICIPANTS * ZYGOSITY_PROBS['heterozygous'])
+    n_hom = int(N_PARTICIPANTS * ZYGOSITY_PROBS['homozygous'])
+    n_mix = N_PARTICIPANTS - n_het - n_hom
+    
+    zygosity_types = (
+        ['heterozygous'] * n_het +
+        ['homozygous'] * n_hom +
+        ['mixed'] * n_mix
     )
+    np.random.shuffle(zygosity_types)
     
-    return part
+    print(f"Generating participants:")
+    print(f"  Heterozygous: {n_het} (expected saturation ~0.25)")
+    print(f"  Homozygous: {n_hom} (expected saturation ~0.50)")
+    print(f"  Mixed: {n_mix} (expected saturation in between)")
+    print()
+    
+    cohort = []
+    ground_truths = []
+    
+    for i in range(N_PARTICIPANTS):
+        participant_id = f'SYN_{i+1:03d}'
+        zygosity_type = zygosity_types[i]
+        
+        print(f"[{i+1}/{N_PARTICIPANTS}] Generating {participant_id} ({zygosity_type})...", 
+              end=' ')
+        
+        part, gt = generate_synthetic_participant(participant_id, zygosity_type)
+        
+        cohort.append(part)
+        ground_truths.append(gt)
+        
+        sat_marker = "🔴 SAT" if gt['is_saturated'] else "🟢 GROW"
+        print(f"✓ (h={gt['h_true']:.3f}, s={gt['s_true']:.3f}, "
+              f"VAF: {gt['vaf_initial']:.3f}→{gt['vaf_final']:.3f}, {sat_marker})")
+    
+    ground_truth_df = pd.DataFrame(ground_truths)
+    
+    print()
+    print("="*80)
+    print("SUMMARY")
+    print("="*80)
+    print(f"Generated {len(cohort)} participants")
+    print(f"\nZygosity distribution:")
+    print(ground_truth_df['zygosity_type'].value_counts())
+    print(f"\nSaturation status:")
+    print(f"  Saturated: {ground_truth_df['is_saturated'].sum()}")
+    print(f"  Still growing: {(~ground_truth_df['is_saturated']).sum()}")
+    print(f"\nFitness statistics:")
+    print(ground_truth_df['s_true'].describe())
+    print(f"\nZygosity parameter (h) statistics:")
+    print(ground_truth_df['h_true'].describe())
+    print(f"\nFinal VAF statistics:")
+    print(ground_truth_df['vaf_final'].describe())
+    
+    return cohort, ground_truth_df
 
 
-def plot_synthetic_data(synthetic_data, save_path=None):
+# ==============================================================================
+# Save Functions
+# ==============================================================================
+
+def save_synthetic_data(cohort, ground_truth_df):
     """
-    Visualize the synthetic data
+    Save synthetic cohort and ground truth.
+    
+    Parameters:
+    -----------
+    cohort : list of AnnData
+        Synthetic participant data
+    ground_truth_df : DataFrame
+        Ground truth parameters
     """
-    AO = synthetic_data['AO']
-    DP = synthetic_data['DP']
-    time_points = synthetic_data['time_points']
-    gt = synthetic_data['ground_truth']
     
-    VAF = AO / DP
+    # Create output directory
+    output_path = Path(OUTPUT_DIR)
+    output_path.mkdir(parents=True, exist_ok=True)
     
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    # Save cohort
+    cohort_file = output_path / OUTPUT_FILE
+    with open(cohort_file, 'wb') as f:
+        pk.dump(cohort, f)
+    print(f"\n✅ Saved cohort to: {cohort_file}")
     
-    # Plot 1: VAFs over time
-    ax = axes[0, 0]
-    for m, mut_name in enumerate(gt['mutation_names']):
-        clone_idx = [i for i, c in enumerate(gt['clonal_structure']) if m in c][0]
-        ax.plot(time_points, VAF[:, m], marker='o', label=mut_name, 
-                alpha=0.7, linewidth=2)
-    ax.set_xlabel('Time', fontsize=12)
-    ax.set_ylabel('VAF', fontsize=12)
-    ax.set_title('Variant Allele Frequencies Over Time', fontsize=14, fontweight='bold')
-    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    ax.grid(True, alpha=0.3)
+    # Save ground truth
+    gt_file = output_path / GROUND_TRUTH_FILE
+    ground_truth_df.to_csv(gt_file, index=False)
+    print(f"✅ Saved ground truth to: {gt_file}")
     
-    # Plot 2: Clone sizes over time
-    ax = axes[0, 1]
-    for c in range(len(gt['clonal_structure'])):
-        ax.plot(time_points, gt['clone_sizes'][:, c], marker='s', 
-                label=f"Clone {c} (s={gt['fitness_values'][c]:.3f})",
-                linewidth=2)
-    ax.set_xlabel('Time', fontsize=12)
-    ax.set_ylabel('Clone Size', fontsize=12)
-    ax.set_title('True Clone Sizes Over Time', fontsize=14, fontweight='bold')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    
-    # Plot 3: Sequencing depth
-    ax = axes[1, 0]
-    depth_df = pd.DataFrame(DP, columns=gt['mutation_names'])
-    depth_df.boxplot(ax=ax)
-    ax.set_xlabel('Mutation', fontsize=12)
-    ax.set_ylabel('Sequencing Depth', fontsize=12)
-    ax.set_title('Sequencing Depth Distribution', fontsize=14, fontweight='bold')
-    ax.tick_params(axis='x', rotation=45)
-    
-    # Plot 4: VAF heatmap
-    ax = axes[1, 1]
-    sns.heatmap(VAF.T, annot=True, fmt='.3f', cmap='YlOrRd', 
-                xticklabels=[f'T{i}' for i in range(len(time_points))],
-                yticklabels=gt['mutation_names'], ax=ax, cbar_kws={'label': 'VAF'})
-    ax.set_xlabel('Timepoint', fontsize=12)
-    ax.set_ylabel('Mutation', fontsize=12)
-    ax.set_title('VAF Heatmap', fontsize=14, fontweight='bold')
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Plot saved to {save_path}")
-    
-    return fig
+    print()
+    print("="*80)
+    print("COMPLETE")
+    print("="*80)
+    print(f"\nTo test inference, run:")
+    print(f"  1. Load: cohort = pickle.load(open('{cohort_file}', 'rb'))")
+    print(f"  2. Run inference on cohort")
+    print(f"  3. Compare results to: ground_truth = pd.read_csv('{gt_file}')")
 
 
-def print_summary(synthetic_data):
-    """Print summary of synthetic data"""
-    gt = synthetic_data['ground_truth']
+# ==============================================================================
+# Validation Function
+# ==============================================================================
+
+def validate_synthetic_data(cohort, ground_truth_df):
+    """
+    Perform basic validation checks on synthetic data.
     
-    print("\n" + "="*60)
-    print("SYNTHETIC DATA SUMMARY")
-    print("="*60)
-    print(f"\nClonal Structure: {gt['clonal_structure']}")
-    print(f"Fitness Values: {gt['fitness_values']}")
-    print(f"Mutation Names: {gt['mutation_names']}")
-    print(f"Zygosity: {dict(zip(gt['mutation_names'], gt['mutation_zygosity']))}")
-    print(f"\nNumber of timepoints: {len(synthetic_data['time_points'])}")
-    print(f"Timepoints: {synthetic_data['time_points']}")
-    print(f"\nData shapes:")
-    print(f"  AO: {synthetic_data['AO'].shape}")
-    print(f"  DP: {synthetic_data['DP'].shape}")
-    print(f"\nVAF ranges:")
-    VAF = synthetic_data['AO'] / synthetic_data['DP']
-    for m, mut_name in enumerate(gt['mutation_names']):
-        print(f"  {mut_name}: [{VAF[:, m].min():.3f}, {VAF[:, m].max():.3f}]")
+    Parameters:
+    -----------
+    cohort : list of AnnData
+        Synthetic participant data
+    ground_truth_df : DataFrame
+        Ground truth parameters
+    """
+    
+    print("\n" + "="*80)
+    print("VALIDATION")
+    print("="*80)
+    
+    issues = []
+    
+    # Check cohort size
+    if len(cohort) != len(ground_truth_df):
+        issues.append(f"Cohort size mismatch: {len(cohort)} vs {len(ground_truth_df)}")
+    
+    # Check each participant
+    for i, (part, gt) in enumerate(zip(cohort, ground_truth_df.to_dict('records'))):
+        pid = part.uns['participant_id']
+        
+        # Check structure
+        if part.shape[0] != 1:
+            issues.append(f"{pid}: Expected 1 mutation, got {part.shape[0]}")
+        
+        # Check timepoints
+        if part.shape[1] != gt['n_timepoints']:
+            issues.append(f"{pid}: Timepoint mismatch")
+        
+        # Check VAF range
+        AO = part.layers['AO'][0]
+        DP = part.layers['DP'][0]
+        VAF = AO / np.maximum(DP, 1)
+        
+        if np.any(VAF < 0) or np.any(VAF > 1):
+            issues.append(f"{pid}: VAF out of range [0,1]")
+        
+        # Check depth
+        if np.any(DP < MIN_DEPTH):
+            issues.append(f"{pid}: Some depths below minimum")
+    
+    if issues:
+        print("⚠️  Issues found:")
+        for issue in issues:
+            print(f"  - {issue}")
+    else:
+        print("✅ All validation checks passed!")
+    
+    # Summary statistics
+    print(f"\nData statistics:")
+    print(f"  Participants: {len(cohort)}")
+    print(f"  Total timepoints: {sum(p.shape[1] for p in cohort)}")
+    print(f"  Avg timepoints per participant: {np.mean([p.shape[1] for p in cohort]):.1f}")
+    
+    all_depths = np.concatenate([p.layers['DP'].flatten() for p in cohort])
+    print(f"  Sequencing depth: {all_depths.mean():.0f} ± {all_depths.std():.0f}")
+    
+    all_vafs = np.concatenate([
+        p.layers['AO'].flatten() / np.maximum(p.layers['DP'].flatten(), 1) 
+        for p in cohort
+    ])
+    print(f"  VAF range: [{all_vafs.min():.3f}, {all_vafs.max():.3f}]")
 
 
-if __name__ == "__main__":
-    # Example 1: Simple 2-clone scenario
-    print("Generating Example 1: 2 clones, 2 mutations each")
-    data1 = generate_synthetic_clonal_data(
-        n_clones=2,
-        n_mutations_per_clone=2,
-        n_timepoints=5,
-        fitness_values=[0.3, 0.6],
-        seed=42
-    )
-    print_summary(data1)
-    fig1 = plot_synthetic_data(data1, save_path='synthetic_data_example1.png')
+# ==============================================================================
+# Main
+# ==============================================================================
+
+def main():
+    """Generate and save synthetic cohort."""
     
-    # Save to CSV
-    pd.DataFrame(data1['AO']).to_csv('AO_example1.csv', index=False)
-    pd.DataFrame(data1['DP']).to_csv('DP_example1.csv', index=False)
+    # Generate synthetic data
+    cohort, ground_truth_df = generate_synthetic_cohort()
     
-    # Example 2: More complex scenario
-    print("\n\nGenerating Example 2: 3 clones, varying mutations")
-    data2 = generate_synthetic_clonal_data(
-        n_clones=3,
-        n_mutations_per_clone=[2, 1, 3],
-        n_timepoints=6,
-        time_points=np.array([0, 2, 4, 6, 8, 10]),
-        fitness_values=[0.2, 0.5, 0.8],
-        seed=123
-    )
-    print_summary(data2)
-    fig2 = plot_synthetic_data(data2, save_path='synthetic_data_example2.png')
+    # Validate
+    validate_synthetic_data(cohort, ground_truth_df)
     
-    # Save to CSV
-    pd.DataFrame(data2['AO']).to_csv('AO_example2.csv', index=False)
-    pd.DataFrame(data2['DP']).to_csv('DP_example2.csv', index=False)
-    
-    print("\n\nSynthetic data generation complete!")
-    print("Files saved:")
-    print("  - AO_example1.csv, DP_example1.csv")
-    print("  - AO_example2.csv, DP_example2.csv")
-    print("  - synthetic_data_example1.png")
-    print("  - synthetic_data_example2.png")
+    # Save
+    save_synthetic_data(cohort, ground_truth_df)
+
+
+if __name__ == '__main__':
+    main()

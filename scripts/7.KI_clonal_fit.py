@@ -1,7 +1,7 @@
 import sys
 sys.path.append("..")   # fix to import modules from root
 from src.general_imports import *
-from src.KI_clonal_inference import *
+from src.KI_clonal_inference_3 import *
 import pickle as pk
 import numpy as np
 import traceback
