@@ -16,7 +16,7 @@ import os
 # Configuration
 # ==============================================================================
 
-INPUT_FILE = '../exports/MDS/MDS_cohort_fitted_unified.pk'
+INPUT_FILE = '../exports/MDS/MDS_cohort_fitted.pk'
 OUTPUT_DIR = '../exports/MDS/figures/'
 SHOW_PLOTS = False  # Set to True to display plots interactively
 DPI = 300

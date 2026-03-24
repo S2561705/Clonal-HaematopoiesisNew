@@ -16,7 +16,7 @@ import anndata as ad
 import os
 
 # Import your inference functions
-from src.KI_clonal_inference_3 import (
+from src.KI_clonal_inference_2 import (
     compute_clonal_models_prob_vec_mixed,
     refine_optimal_model_posterior_vec
 )

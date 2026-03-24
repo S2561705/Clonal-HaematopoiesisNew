@@ -1,7 +1,7 @@
 import sys
 sys.path.append("..")   # fix to import modules from root
 from src.general_imports import *
-from src.KI_clonal_inference_3 import *
+from src.KI_clonal_inference_2 import *
 import pickle as pk
 import numpy as np
 import traceback
@@ -105,12 +105,12 @@ def run_inference_on_participant(part, index, s_resolution=50,
             resolution=grid_resolution
         )
         
-        # Display top models
-        print(f"\n✅ Successfully computed {len(part.uns['model_dict'])} models")
         print(f"\nTop 5 models:")
+        total_prob = sum(v[1] for v in part.uns['model_dict'].values())
         for i, (k, v) in enumerate(list(part.uns['model_dict'].items())[:5]):
-            cs, prob = v
-            print(f"  {i+1}. {k}: prob={prob:.3e}, structure={cs}")
+            cs, prob = v[0], v[1]
+            norm = prob / total_prob if total_prob > 0 else 0.0
+            print(f"  {i+1}. {k}: posterior={norm*100:.2f}%, raw={prob:.3e}, structure={cs}")
             
     except Exception as e:
         print(f"❌ MODEL COMPUTATION FAILED: {e}")
@@ -239,6 +239,24 @@ def main():
             with open(OUTPUT_FILE, 'rb') as f:
                 verified = pk.load(f)
             print(f"✅ Verified: saved {len(verified)} participants")
+            
+            # Verify save
+            with open(OUTPUT_FILE, 'rb') as f:
+                verified = pk.load(f)
+            print(f"✅ Verified: saved {len(verified)} participants")
+
+            # ── Sub-mutation fitness inference ────────────────────────────
+            from src.KI_Submutation import run_sub_mutation_inference_on_cohort
+
+            SUB_OUTPUT_FILE = '../exports/MDS/MDS_cohort_fitted_sub.pk'
+            run_sub_mutation_inference_on_cohort(
+                input_file  = OUTPUT_FILE,
+                output_file = SUB_OUTPUT_FILE,
+            )
+
+        except Exception as e:
+            print(f"❌ ERROR saving results: {e}")
+            traceback.print_exc()
             
         except Exception as e:
             print(f"❌ ERROR saving results: {e}")

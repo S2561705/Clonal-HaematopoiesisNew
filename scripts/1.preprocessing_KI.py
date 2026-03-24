@@ -16,7 +16,7 @@ rename_map = {
     'SEX': 'sex',
 }
 
-mds_df = pd.read_csv('../data/MDS_COHORT.csv', delimiter=';', dtype=str)
+mds_df = pd.read_csv('../data/MDS_COHORT_combined.csv', delimiter=';', dtype=str)
 mds_df = mds_df.rename(columns=rename_map)
 
 def clean_column(series):
@@ -38,7 +38,7 @@ mds_df['p_key'] = mds_df['PreferredSymbol'] + ' ' + mds_df['protein_substitution
 mds_df = mds_df.sort_values(['participant_id', 'VISIT_NUMBER'])
 mds_df['DELTA_YEARS'] = mds_df.groupby('participant_id')['age'].diff().fillna(0)
 
-mds_df = mds_df.dropna(subset=['AF', 'DP', 'age'])
+mds_df = mds_df.dropna(subset=['AF', 'DP'])  # drop age requirement, or make it optional
 mds_df = mds_df[mds_df['DP'] > 0]
 
 print(f"Processing {len(mds_df['participant_id'].unique())} participants")

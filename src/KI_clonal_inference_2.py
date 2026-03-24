@@ -1,5 +1,6 @@
 import sys
 sys.path.append("..")   # fix to import modules from root
+from scripts.debug_patient2 import AO, DP
 from src.general_imports import *
 
 import jax
@@ -168,17 +169,11 @@ def compute_global_variables_mixed(s_vec, AO, DP, total_cells, deterministic_siz
     max_totals = max_total_per_mutation[None, :, None]  # (1, n_mut, 1)
     x_total_vec = total_raw * max_totals
     
-    # Sample fraction that is homozygous (beta distribution centered on observed VAF behavior)
-    # If observed VAF is high, more likely to have homozygous component
-    # Alpha/beta for beta distribution based on observed VAF
-    alpha = jnp.maximum(observed_vaf * 10, 1.0)  # Higher VAF → higher alpha
-    beta_param = jnp.maximum((1 - observed_vaf) * 10, 1.0)  # Lower VAF → higher beta
-    
-    frac_hom = jrnd.beta(key_hom, 
-                         a=alpha[:, :, None], 
-                         b=beta_param[:, :, None],
-                         shape=(n_tps, n_mut, resolution))
-    
+    # REPLACE lines 151-153 with:
+    frac_hom = jrnd.uniform(key_hom, 
+                        minval=0.0, 
+                        maxval=1.0,
+                        shape=(n_tps, n_mut, resolution))
     # Allocate total cells between het and hom
     # For heterozygous-only: frac_hom = 0, for all homozygous: frac_hom = 1
     x_hom_vec = x_total_vec * frac_hom
@@ -296,9 +291,6 @@ def mutation_specific_ll_mixed_grid(i, recursive_term_vec, x_het_vec, x_hom_vec,
 def compute_clonal_models_prob_vec_mixed(part, s_resolution=50, min_s=0.01, max_s=3,
                                         filter_invalid=True, disable_progressbar=False,
                                         resolution=600, master_key_seed=758493):
-    """
-    FIXED VERSION: Main entry point with better error handling.
-    """
     
     print("="*60)
     print("COMPUTING CLONAL MODELS PROBABILITIES (VECTORIZED - FIXED)")
@@ -319,18 +311,16 @@ def compute_clonal_models_prob_vec_mixed(part, s_resolution=50, min_s=0.01, max_
         part.uns['warning'] = 'Too many possible structures'
         cs_list = [[[i] for i in range(n_mutations)]]
 
-    # Create master key and split it for each model
     master_key = jrnd.PRNGKey(master_key_seed)
     keys = jrnd.split(master_key, len(cs_list))
 
+    # --- Step 1: compute raw probability for every model, store as 2-tuple ---
     for i, cs in enumerate(cs_list):
         print(f"\nProcessing model {i}/{len(cs_list)}: {cs}")
         
-        # Deterministic estimates + max_total bound
         deterministic_size, total_cells, max_total_per_mutation, clonal_map = \
             compute_deterministic_size_mixed(cs, AO, DP, AO.shape[1])
 
-        # Call vectorised mixed-zygosity likelihood with its own key
         key_i = keys[i]
         output = jax_cs_hmm_ll_vec_mixed(s_vec, AO, DP, time_points, cs,
                                         deterministic_size, total_cells, max_total_per_mutation, 
@@ -340,17 +330,42 @@ def compute_clonal_models_prob_vec_mixed(part, s_resolution=50, min_s=0.01, max_
         part.uns['model_dict'][f'model_{i}'] = (cs, model_prob)
         print(f"Model {i} probability: {model_prob:.3e}")
 
-    # Sort models by probability
-    part.uns['model_dict'] = {k: v for k, v in sorted(part.uns['model_dict'].items(), 
-                                                       key=lambda item: item[1][1], reverse=True)}
-    
+    # --- Step 2: normalise to get posterior probabilities ---
+    total_prob = sum(v[1] for v in part.uns['model_dict'].values())
+
+    if total_prob == 0 or not np.isfinite(total_prob):
+        print("\n⚠️  WARNING: All model probabilities are zero. Cannot normalise.")
+        normalised = {k: 0.0 for k in part.uns['model_dict']}
+    else:
+        normalised = {k: v[1] / total_prob for k, v in part.uns['model_dict'].items()}
+
+    # --- Step 3: upgrade to 3-tuple (cs, raw_prob, normalised_prob) and sort ---
+    part.uns['model_dict'] = {
+        k: (v[0], v[1], normalised[k])
+        for k, v in part.uns['model_dict'].items()
+    }
+
+    part.uns['model_dict'] = {
+        k: v for k, v in sorted(
+            part.uns['model_dict'].items(),
+            key=lambda item: item[1][2],  # sort by normalised prob
+            reverse=True
+        )
+    }
+
+    # --- Step 4: print ranking ---
     print("\n" + "="*60)
-    print("MODEL RANKING (sorted by probability):")
+    print("MODEL RANKING (sorted by posterior probability):")
     print("="*60)
     for i, (k, v) in enumerate(part.uns['model_dict'].items()):
-        cs, prob = v
-        print(f"Rank {i}: {k} - Probability: {prob:.3e}, Structure: {cs}")
-    
+        cs, raw, norm = v
+        print(f"Rank {i}: {k} - Raw: {raw:.3e} | Posterior: {norm*100:.2f}% | Structure: {cs}")
+
+    print(f"\nTop 5 models:")
+    for i, (k, v) in enumerate(list(part.uns['model_dict'].items())[:5]):
+        cs, raw, norm = v
+        print(f"  {i+1}. {k}: posterior={norm*100:.2f}%, raw={raw:.3e}, structure={cs}")
+
     return part
 
 
@@ -398,10 +413,14 @@ def infer_sh_jointly_from_dynamics(cs, AO, DP, time_points,
         print(f"\nClone {clone_idx}: {clone_muts}")
         print("-" * 70)
         
-        # Get data for this clone
-        mut_idx = clone_muts[0]
-        AO_clone = np.array(AO[:, mut_idx])  # (n_tp,)
-        DP_clone = np.array(DP[:, mut_idx])  # (n_tp,)
+        # Select leading mutation (highest summed VAF across timepoints) — consistent with compute_deterministic_size_mixed
+        vaf_ratio = AO / np.maximum(DP, 1.0)
+        clone_vafs = vaf_ratio[:, clone_muts]
+        vaf_sums = clone_vafs.sum(axis=0)
+        mut_idx = clone_muts[int(np.argmax(vaf_sums))]
+
+        AO_clone = np.array(AO[:, mut_idx])
+        DP_clone = np.array(DP[:, mut_idx])
         
         # Observed VAF trajectory
         observed_vaf = AO_clone / np.maximum(DP_clone, 1.0)
@@ -412,6 +431,12 @@ def infer_sh_jointly_from_dynamics(cs, AO, DP, time_points,
         joint_log_likelihood = np.zeros((s_resolution, h_resolution))
         
         print(f"  Computing ({s_resolution} × {h_resolution}) likelihood grid...")
+        
+        valid_mask = np.array(DP_clone) > 0
+        AO_clone = AO_clone[valid_mask]
+        DP_clone = DP_clone[valid_mask]
+        time_points_valid = np.array(time_points)[valid_mask]
+        observed_vaf = AO_clone / np.maximum(DP_clone, 1.0)
         
         for s_idx, s in enumerate(s_range):
             for h_idx, h in enumerate(h_range):
@@ -636,7 +661,7 @@ def compute_model_likelihood(output, cs, s_range):
     return model_probability
 
 
-def compute_invalid_combinations(part, pearson_distance_threshold=0.5):
+def compute_invalid_combinations(part, pearson_distance_threshold=0.7):
     """Find mutation pairs with very different temporal correlation"""
     # Compute pearson of each mutation with time
     correlation_matrix = np.corrcoef(
