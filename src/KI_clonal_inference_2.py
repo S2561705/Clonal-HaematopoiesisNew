@@ -413,7 +413,8 @@ def infer_sh_jointly_from_dynamics(cs, AO, DP, time_points,
         print(f"\nClone {clone_idx}: {clone_muts}")
         print("-" * 70)
         
-        # Select leading mutation (highest summed VAF across timepoints) — consistent with compute_deterministic_size_mixed
+        # Select leading mutation (highest summed VAF across timepoints) —
+        # consistent with compute_deterministic_size_mixed
         vaf_ratio = AO / np.maximum(DP, 1.0)
         clone_vafs = vaf_ratio[:, clone_muts]
         vaf_sums = clone_vafs.sum(axis=0)
@@ -421,22 +422,22 @@ def infer_sh_jointly_from_dynamics(cs, AO, DP, time_points,
 
         AO_clone = np.array(AO[:, mut_idx])
         DP_clone = np.array(DP[:, mut_idx])
-        
-        # Observed VAF trajectory
+
+        # Mask out zero-depth timepoints (ND / not in panel)
+        valid_mask = DP_clone > 0
+        AO_clone = AO_clone[valid_mask]
+        DP_clone = DP_clone[valid_mask]
+        time_points_valid = np.array(time_points)[valid_mask]
         observed_vaf = AO_clone / np.maximum(DP_clone, 1.0)
         
-        print(f"  VAF trajectory: {observed_vaf[0]:.3f} → {observed_vaf[-1]:.3f}")
+        print(f"  Leading mutation index: {mut_idx}")
+        print(f"  Valid timepoints: {valid_mask.sum()} / {len(valid_mask)}")
+        print(f"  VAF trajectory: {' → '.join(f'{v:.3f}' for v in observed_vaf)}")
         
         # 2D likelihood grid over (s, h)
         joint_log_likelihood = np.zeros((s_resolution, h_resolution))
         
         print(f"  Computing ({s_resolution} × {h_resolution}) likelihood grid...")
-        
-        valid_mask = np.array(DP_clone) > 0
-        AO_clone = AO_clone[valid_mask]
-        DP_clone = DP_clone[valid_mask]
-        time_points_valid = np.array(time_points)[valid_mask]
-        observed_vaf = AO_clone / np.maximum(DP_clone, 1.0)
         
         for s_idx, s in enumerate(s_range):
             for h_idx, h in enumerate(h_range):
@@ -445,15 +446,15 @@ def infer_sh_jointly_from_dynamics(cs, AO, DP, time_points,
                 log_lik = 0
                 
                 # Initial size estimate
-                N_mut_init = observed_vaf[0] * 2 * N_w / (1 + h)  # Rough estimate
+                N_mut_init = observed_vaf[0] * 2 * N_w / (1 + h)
                 N_mut_init = max(N_mut_init, 100)
                 
                 N_mut = N_mut_init
                 
-                for tp_idx in range(len(time_points)):
-                    # Grow clone
+                # ── FIXED: iterate over valid timepoints only ──────────────
+                for tp_idx in range(len(time_points_valid)):
                     if tp_idx > 0:
-                        dt = time_points[tp_idx] - time_points[tp_idx-1]
+                        dt = time_points_valid[tp_idx] - time_points_valid[tp_idx - 1]
                         N_mut = N_mut * np.exp(s * dt)
                     
                     # Cap at wildtype population (can't exceed total)
@@ -471,6 +472,7 @@ def infer_sh_jointly_from_dynamics(cs, AO, DP, time_points,
                     ao = int(AO_clone[tp_idx])
                     dp = int(DP_clone[tp_idx])
                     log_lik += binom.logpmf(ao, dp, vaf_expected)
+                # ────────────────────────────────────────────────────────────
                 
                 joint_log_likelihood[s_idx, h_idx] = log_lik
         
@@ -686,9 +688,16 @@ def compute_invalid_combinations(part, pearson_distance_threshold=0.7):
 def find_valid_clonal_structures(part, p_distance_threshold=1, filter_invalid=True):
     """
     Find all valid clonal structures using pearson correlation analysis
+    and a VAF sum feasibility check (sum of leading mutation VAFs must be ≤ 1
+    at every timepoint, otherwise the structure is biologically impossible).
     """
     
     n_mutations = part.shape[0]
+
+    # AO/DP layers are (n_mutations, n_timepoints); transpose to (n_tps, n_muts)
+    AO = part.layers['AO'].T
+    DP = part.layers['DP'].T
+    vaf_ratio = AO / np.maximum(DP, 1.0)  # (n_tps, n_muts)
 
     if n_mutations == 1:
         valid_cs = [[[0]]]
@@ -696,10 +705,8 @@ def find_valid_clonal_structures(part, p_distance_threshold=1, filter_invalid=Tr
 
     else:
         if filter_invalid is True:
-            # Compute invalid clonal structures using correlation analysis
             compute_invalid_combinations(part, pearson_distance_threshold=p_distance_threshold)
             
-        # Create list of all possible clonal structures
         a = list(partition(list(range(n_mutations))))
         cs_list = [cs for cs in a]
 
@@ -707,23 +714,39 @@ def find_valid_clonal_structures(part, p_distance_threshold=1, filter_invalid=Tr
             return cs_list
         
         else:
-            # Find all valid clonal structures
             valid_cs = []
 
             for cs in cs_list:
+                # ── existing correlation filter ────────────────────────────
                 invalid_combinations_in_cs = 0
                 for clone in cs:
-                    # Compute all pairs of mutations inside clone
                     mut_comb = list(combinations(clone, 2))
-                    # Check if any pair is invalid
                     n_invalid_comb_in_clone = len(
                         [comb for comb in mut_comb 
                             if list(comb) in part.uns['invalid_combinations']])
                     invalid_combinations_in_cs += n_invalid_comb_in_clone
 
-                # Append valid clonal structure
-                if invalid_combinations_in_cs == 0:
-                    valid_cs.append(cs)
+                if invalid_combinations_in_cs > 0:
+                    continue
+
+                # ── NEW: VAF sum feasibility filter ───────────────────────
+                # For each clone, find the leading mutation (highest summed VAF)
+                # then check that the sum of leading VAFs across clones ≤ 1
+                # at every timepoint. If it ever exceeds 1 the structure is
+                # biologically impossible in a diploid model.
+                leading_vafs = []
+                for clone in cs:
+                    clone_vafs = vaf_ratio[:, clone]          # (n_tps, n_muts_in_clone)
+                    vaf_sums   = clone_vafs.sum(axis=0)       # (n_muts_in_clone,)
+                    lead_idx   = int(np.argmax(vaf_sums))
+                    leading_vafs.append(clone_vafs[:, lead_idx])  # (n_tps,)
+
+                leading_vafs = np.stack(leading_vafs, axis=1)  # (n_tps, n_clones)
+                if np.any(leading_vafs.sum(axis=1) > 1.0):
+                    continue
+                # ──────────────────────────────────────────────────────────
+
+                valid_cs.append(cs)
                     
             return valid_cs
 
