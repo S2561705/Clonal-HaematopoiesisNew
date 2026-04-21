@@ -1,0 +1,35 @@
+{
+  "sim_config": {
+    "K": 100000.0,
+    "dp_mean": 5000.0,
+    "dp_min": 100,
+    "dp_sd": 2000.0,
+    "followup_window": 80.0,
+    "sample_every": 60,
+    "seed": 123,
+    "t_end": 200.0,
+    "t_points": 2000,
+    "vaf_threshold": 0.05
+  },
+  "sweep": {
+    "B_values": [
+      0.0001,
+      0.001,
+      0.01,
+      0.1,
+      1.0,
+      10.0
+    ],
+    "E_values": [
+      100000.0,
+      200000.0,
+      500000.0,
+      1000000.0
+    ],
+    "map_starts": 6,
+    "reps": 20,
+    "s_true": 0.3,
+    "s_upper": 1.0,
+    "x0_true": 1.0
+  }
+}

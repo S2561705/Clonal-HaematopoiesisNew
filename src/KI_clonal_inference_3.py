@@ -1,5 +1,6 @@
 import sys
 sys.path.append("..")   # fix to import modules from root
+from scripts.debug_patient2 import AO, DP
 from src.general_imports import *
 
 import jax
@@ -10,7 +11,6 @@ import jax.scipy.stats as jsp_stats
 import jax.random as jrnd
 from itertools import combinations
 from scipy.stats import binom  # For h inference
-
 
 key = jrnd.PRNGKey(758493)  # Random seed is explicit in JAX
 
@@ -289,11 +289,7 @@ def mutation_specific_ll_mixed_grid(i, recursive_term_vec, x_het_vec, x_hom_vec,
 
 def compute_clonal_models_prob_vec_mixed(part, s_resolution=50, min_s=0.01, max_s=3,
                                         filter_invalid=True, disable_progressbar=False,
-                                        resolution=600, master_key_seed=758493,
-                                        correlation_threshold=0.6):
-    """
-    FIXED VERSION: Main entry point with better error handling.
-    """
+                                        resolution=600, master_key_seed=758493):
     
     print("="*60)
     print("COMPUTING CLONAL MODELS PROBABILITIES (VECTORIZED - FIXED)")
@@ -307,26 +303,23 @@ def compute_clonal_models_prob_vec_mixed(part, s_resolution=50, min_s=0.01, max_
     n_mutations = part.shape[0]
     part.uns['model_dict'] = {}
 
-    cs_list = find_valid_clonal_structures(part, filter_invalid=filter_invalid,
-                                           correlation_threshold=correlation_threshold)
+    cs_list = find_valid_clonal_structures(part, filter_invalid=filter_invalid)
 
     part.uns['warning'] = None
     if len(cs_list) > 100:
         part.uns['warning'] = 'Too many possible structures'
         cs_list = [[[i] for i in range(n_mutations)]]
 
-    # Create master key and split it for each model
     master_key = jrnd.PRNGKey(master_key_seed)
     keys = jrnd.split(master_key, len(cs_list))
 
+    # --- Step 1: compute raw probability for every model, store as 2-tuple ---
     for i, cs in enumerate(cs_list):
         print(f"\nProcessing model {i}/{len(cs_list)}: {cs}")
         
-        # Deterministic estimates + max_total bound
         deterministic_size, total_cells, max_total_per_mutation, clonal_map = \
             compute_deterministic_size_mixed(cs, AO, DP, AO.shape[1])
 
-        # Call vectorised mixed-zygosity likelihood with its own key
         key_i = keys[i]
         output = jax_cs_hmm_ll_vec_mixed(s_vec, AO, DP, time_points, cs,
                                         deterministic_size, total_cells, max_total_per_mutation, 
@@ -336,190 +329,294 @@ def compute_clonal_models_prob_vec_mixed(part, s_resolution=50, min_s=0.01, max_
         part.uns['model_dict'][f'model_{i}'] = (cs, model_prob)
         print(f"Model {i} probability: {model_prob:.3e}")
 
-    # Sort models by probability
-    part.uns['model_dict'] = {k: v for k, v in sorted(part.uns['model_dict'].items(), 
-                                                       key=lambda item: item[1][1], reverse=True)}
-    
+    # --- Step 2: normalise to get posterior probabilities ---
     total_prob = sum(v[1] for v in part.uns['model_dict'].values())
 
+    if total_prob == 0 or not np.isfinite(total_prob):
+        print("\n⚠️  WARNING: All model probabilities are zero. Cannot normalise.")
+        normalised = {k: 0.0 for k in part.uns['model_dict']}
+    else:
+        normalised = {k: v[1] / total_prob for k, v in part.uns['model_dict'].items()}
+
+    # --- Step 3: upgrade to 3-tuple (cs, raw_prob, normalised_prob) and sort ---
+    part.uns['model_dict'] = {
+        k: (v[0], v[1], normalised[k])
+        for k, v in part.uns['model_dict'].items()
+    }
+
+    part.uns['model_dict'] = {
+        k: v for k, v in sorted(
+            part.uns['model_dict'].items(),
+            key=lambda item: item[1][2],  # sort by normalised prob
+            reverse=True
+        )
+    }
+
+    # --- Step 4: print ranking ---
     print("\n" + "="*60)
-    print("MODEL RANKING (sorted by probability):")
+    print("MODEL RANKING (sorted by posterior probability):")
     print("="*60)
     for i, (k, v) in enumerate(part.uns['model_dict'].items()):
-        if len(v) == 3:
-            cs, prob, norm = v
-        else:
-            cs, prob = v
-            norm = prob / total_prob if total_prob > 0 else 0.0
-        print(f"Rank {i}: {k} - Probability: {prob:.3e}, Normalised: {norm*100:.2f}%, Structure: {cs}")
+        cs, raw, norm = v
+        print(f"Rank {i}: {k} - Raw: {raw:.3e} | Posterior: {norm*100:.2f}% | Structure: {cs}")
+
+    print(f"\nTop 5 models:")
+    for i, (k, v) in enumerate(list(part.uns['model_dict'].items())[:5]):
+        cs, raw, norm = v
+        print(f"  {i+1}. {k}: posterior={norm*100:.2f}%, raw={raw:.3e}, structure={cs}")
+
     return part
 
 
 def infer_sh_jointly_from_dynamics(cs, AO, DP, time_points, 
                                    deterministic_size, total_cells, max_total_per_mutation,
-                                   s_resolution=30, h_resolution=20, lamb=1.3, N_w=1e5):
+                                   s_resolution=30, h_resolution=20, lamb=1.3, N_w=1e5,
+                                   constraint_strength=2.0):
     """
-    Joint inference of (s, h) using temporal VAF dynamics.
+    Joint inference of (s, h) with soft global constraint on WEIGHTED AVERAGE h.
     
-    Key insight: The VAF trajectory shape reveals both fitness and zygosity:
-    - Growth rate → fitness (s)
-    - Saturation level → zygosity (h)
+    The constraint: weighted_mean(h_i) >= h_global = max(0, 2*V_sum - 1)
+    where weights are clone sizes (N_mut_i).
+    
+    Individual clones can have any h in [0, 1], but the population average
+    is softly pulled toward satisfying the global constraint.
     
     Parameters:
     -----------
-    cs : list of lists
-        Clonal structure
-    AO, DP : arrays (n_timepoints, n_mutations)
-        Observed data
-    time_points : array
-        Observation timepoints
-    s_resolution, h_resolution : int
-        Grid resolution
-    lamb : float
-        Birth rate
-    N_w : float
-        Wild-type population size
-        
-    Returns:
-    --------
-    results : list of dicts
-        MAP estimates and posteriors for each clone
+    constraint_strength : float
+        Strength of soft constraint (0 = no constraint, higher = stronger)
     """
     
     print("\n" + "="*70)
-    print("JOINT (s, h) INFERENCE FROM TEMPORAL DYNAMICS")
+    print("JOINT (s, h) INFERENCE WITH SOFT GLOBAL CONSTRAINT")
     print("="*70)
     
     s_range = np.linspace(0.01, 1.0, s_resolution)
-    h_range = np.linspace(0, 1, h_resolution)
+    h_range = np.linspace(0, 1, h_resolution)  # All clones: full [0,1] range
     
+    # Compute VAF trajectories and global constraint
+    vaf_ratio = AO / np.maximum(DP, 1.0)
+    n_clones = len(cs)
+    
+    leading_vafs = []
+    clone_weights = []
+    
+    for clone_muts in cs:
+        clone_vafs = vaf_ratio[:, clone_muts]
+        vaf_sums = clone_vafs.sum(axis=0)
+        lead_idx = clone_muts[int(np.argmax(vaf_sums))]
+        vaf_trajectory = np.array(vaf_ratio[:, lead_idx])
+        leading_vafs.append(vaf_trajectory)
+        # Weight by time-integrated VAF (proxy for clone size)
+        clone_weights.append(np.trapz(vaf_trajectory))
+    
+    # Global constraint from final timepoint VAF sum
+    V_sum_final = sum([v[-1] for v in leading_vafs])
+    h_global = max(0.0, 2 * V_sum_final - 1)
+    
+    print(f"\nGlobal constraint: V_sum = {V_sum_final:.3f} → h_global = {h_global:.3f}")
+    print(f"Required: weighted_mean(h) >= {h_global:.3f}")
+    print(f"Constraint strength: {constraint_strength}")
+    print("-" * 70)
+    
+    # Normalize clone weights for prior calculation
+    clone_weights = np.array(clone_weights)
+    if clone_weights.sum() > 0:
+        clone_weights = clone_weights / clone_weights.sum()
+    else:
+        clone_weights = np.ones(n_clones) / n_clones
+    
+    # Store intermediate results for iterative constraint
     results = []
+    clone_data = []  # Store trajectories and data for each clone
     
     for clone_idx, clone_muts in enumerate(cs):
-        print(f"\nClone {clone_idx}: {clone_muts}")
-        print("-" * 70)
+        vaf_trajectory = leading_vafs[clone_idx]
         
-        # Get data for this clone
-        mut_idx = clone_muts[0]
-        AO_clone = np.array(AO[:, mut_idx])  # (n_tp,)
-        DP_clone = np.array(DP[:, mut_idx])  # (n_tp,)
+        # Select leading mutation for this clone
+        mut_idx = clone_muts[int(np.argmax([vaf_ratio[:, m].sum() for m in clone_muts]))]
         
-        # Observed VAF trajectory
+        AO_clone = np.array(AO[:, mut_idx])
+        DP_clone = np.array(DP[:, mut_idx])
+        valid_mask = DP_clone > 0
+        AO_clone = AO_clone[valid_mask]
+        DP_clone = DP_clone[valid_mask]
+        time_points_valid = np.array(time_points)[valid_mask]
         observed_vaf = AO_clone / np.maximum(DP_clone, 1.0)
         
-        print(f"  VAF trajectory: {observed_vaf[0]:.3f} → {observed_vaf[-1]:.3f}")
+        clone_data.append({
+            'AO': AO_clone,
+            'DP': DP_clone,
+            'time_points': time_points_valid,
+            'observed_vaf': observed_vaf,
+            'weight': clone_weights[clone_idx],
+            'vaf_final': vaf_trajectory[-1],
+        })
         
-        # 2D likelihood grid over (s, h)
-        joint_log_likelihood = np.zeros((s_resolution, h_resolution))
+        print(f"\nClone {clone_idx}: {clone_muts}")
+        print(f"  VAF trajectory: {' → '.join(f'{v:.3f}' for v in observed_vaf)}")
+    
+    # Two-pass inference: first get unconstrained estimates, then apply soft constraint
+    # Pass 1: Compute likelihood grids for all clones independently
+    print(f"\n{'='*70}")
+    print("Pass 1: Computing unconstrained likelihoods...")
+    
+    likelihood_grids = []
+    
+    for clone_idx in range(n_clones):
+        data = clone_data[clone_idx]
+        AO_clone = data['AO']
+        DP_clone = data['DP']
+        time_points_valid = data['time_points']
+        observed_vaf = data['observed_vaf']
         
-        print(f"  Computing ({s_resolution} × {h_resolution}) likelihood grid...")
+        joint_log_lik = np.zeros((s_resolution, h_resolution))
         
         for s_idx, s in enumerate(s_range):
             for h_idx, h in enumerate(h_range):
                 
-                # Simulate clone expansion under (s, h)
                 log_lik = 0
-                
-                # Initial size estimate
-                N_mut_init = observed_vaf[0] * 2 * N_w / (1 + h)  # Rough estimate
+                N_mut_init = observed_vaf[0] * 2 * N_w / (1 + h)
                 N_mut_init = max(N_mut_init, 100)
-                
                 N_mut = N_mut_init
                 
-                for tp_idx in range(len(time_points)):
-                    # Grow clone
+                for tp_idx in range(len(time_points_valid)):
                     if tp_idx > 0:
-                        dt = time_points[tp_idx] - time_points[tp_idx-1]
+                        dt = time_points_valid[tp_idx] - time_points_valid[tp_idx - 1]
                         N_mut = N_mut * np.exp(s * dt)
                     
-                    # Cap at wildtype population (can't exceed total)
                     N_mut = min(N_mut, N_w * 0.95)
-                    
-                    # Split into het/hom based on h
                     N_hom = N_mut * h
                     N_het = N_mut * (1 - h)
                     
-                    # Expected VAF
                     vaf_expected = (N_het + 2 * N_hom) / (2 * N_w)
                     vaf_expected = np.clip(vaf_expected, 1e-8, 1.0 - 1e-8)
                     
-                    # Binomial log likelihood
                     ao = int(AO_clone[tp_idx])
                     dp = int(DP_clone[tp_idx])
                     log_lik += binom.logpmf(ao, dp, vaf_expected)
                 
-                joint_log_likelihood[s_idx, h_idx] = log_lik
+                joint_log_lik[s_idx, h_idx] = log_lik
         
-        # Convert to probability
-        max_log_lik = joint_log_likelihood.max()
-        joint_log_likelihood = joint_log_likelihood - max_log_lik
-        joint_likelihood = np.exp(np.clip(joint_log_likelihood, -700, 0))
-        
-        # Uniform prior
-        prior_s = np.ones_like(s_range) / s_range.shape[0]
-        prior_h = np.ones_like(h_range) / h_range.shape[0]
-        prior_joint = prior_s[:, None] * prior_h[None, :]
-        
-        # Posterior
-        joint_posterior = joint_likelihood * prior_joint
-        Z = joint_posterior.sum()
-        
-        if Z == 0 or not np.isfinite(Z):
-            print(f"  ⚠️  WARNING: Posterior normalization failed")
-            joint_posterior = prior_joint
-        else:
-            joint_posterior = joint_posterior / Z
+        likelihood_grids.append(joint_log_lik)
+    
+    # Pass 2: Apply soft global constraint via iterative refinement
+    print("Pass 2: Applying soft global constraint...")
+    
+    # Initialize with unconstrained posteriors
+    posteriors = []
+    for grid in likelihood_grids:
+        max_log = grid.max()
+        lik = np.exp(np.clip(grid - max_log, -700, 0))
+        posteriors.append(lik / lik.sum())
+    
+    # Iteratively adjust to satisfy global constraint
+    if constraint_strength > 0 and h_global > 0:
+        for iteration in range(5):  # Few iterations suffice
+            # Compute current weighted h expectation
+            weighted_h = 0
+            total_size = 0
+            
+            for i, (post, data) in enumerate(zip(posteriors, clone_data)):
+                # Marginal h posterior for this clone
+                h_marginal = post.sum(axis=0)  # Sum over s
+                h_marginal = h_marginal / (h_marginal.sum() + 1e-300)
+                expected_h = np.sum(h_range * h_marginal)
+                
+                # Size weight (approximate by final VAF)
+                size_weight = data['vaf_final'] + 0.01
+                weighted_h += expected_h * size_weight
+                total_size += size_weight
+            
+            weighted_h /= total_size
+            
+            print(f"  Iteration {iteration}: weighted h = {weighted_h:.3f} (target >= {h_global:.3f})")
+            
+            # If constraint satisfied, stop
+            if weighted_h >= h_global * 0.95:
+                print(f"  Constraint satisfied.")
+                break
+            
+            # Otherwise, adjust posteriors to pull toward higher h
+            for i, (post, data) in enumerate(zip(posteriors, clone_data)):
+                size_weight = data['vaf_final'] + 0.01
+                
+                h_marginal = post.sum(axis=0)
+                expected_h = np.sum(h_range * h_marginal / (h_marginal.sum() + 1e-300))
+                
+                if weighted_h < h_global:
+                    target_h = min(1.0, expected_h + (h_global - weighted_h) * 
+                                  (size_weight / total_size) * constraint_strength)
+                    
+                    prior = np.exp(-((h_range - target_h) ** 2) / (2 * 0.15 ** 2))
+                    prior = prior / prior.sum()
+                    
+                    new_post = post * prior[None, :]
+                    posteriors[i] = new_post / (new_post.sum() + 1e-300)
+    
+    # Extract final results from posteriors
+    for clone_idx in range(n_clones):
+        post = posteriors[clone_idx]
+        data = clone_data[clone_idx]
         
         # Marginalize
-        s_posterior = joint_posterior.sum(axis=1)
-        h_posterior = joint_posterior.sum(axis=0)
-        
-        s_posterior = s_posterior / (s_posterior.sum() + 1e-300)
-        h_posterior = h_posterior / (h_posterior.sum() + 1e-300)
+        s_post = post.sum(axis=1)
+        h_post = post.sum(axis=0)
+        s_post = s_post / (s_post.sum() + 1e-300)
+        h_post = h_post / (h_post.sum() + 1e-300)
         
         # MAP estimates
-        s_map_idx, h_map_idx = np.unravel_index(
-            joint_posterior.argmax(), joint_posterior.shape
-        )
-        s_map = s_range[s_map_idx]
-        h_map = h_range[h_map_idx]
-        
-        # Marginal MAP
-        s_map_marginal = s_range[np.argmax(s_posterior)]
-        h_map_marginal = h_range[np.argmax(h_posterior)]
+        s_map = s_range[np.argmax(s_post)]
+        h_map = h_range[np.argmax(h_post)]
         
         # Credible intervals
-        s_cumsum = np.cumsum(s_posterior)
-        h_cumsum = np.cumsum(h_posterior)
-        
+        s_cumsum = np.cumsum(s_post)
+        h_cumsum = np.cumsum(h_post)
         s_ci_low = s_range[np.searchsorted(s_cumsum, 0.05)]
         s_ci_high = s_range[np.searchsorted(s_cumsum, 0.95)]
         h_ci_low = h_range[np.searchsorted(h_cumsum, 0.05)]
         h_ci_high = h_range[np.searchsorted(h_cumsum, 0.95)]
         
-        print(f"\n  Results:")
-        print(f"    s = {s_map_marginal:.3f}  [90% CI: {s_ci_low:.3f} - {s_ci_high:.3f}]")
-        print(f"    h = {h_map_marginal:.3f}  [90% CI: {h_ci_low:.3f} - {h_ci_high:.3f}]")
+        # Cell count estimates
+        N_mut_final = data['observed_vaf'][-1] * 2 * N_w / (1 + h_map)
+        N_het_final = N_mut_final * (1 - h_map)
+        N_hom_final = N_mut_final * h_map
+        
+        print(f"\nClone {clone_idx} Results:")
+        print(f"  s = {s_map:.3f} [{s_ci_low:.3f}-{s_ci_high:.3f}]")
+        print(f"  h = {h_map:.3f} [{h_ci_low:.3f}-{h_ci_high:.3f}]")
+        print(f"  N_het ≈ {N_het_final:.0e}, N_hom ≈ {N_hom_final:.0e}")
         
         results.append({
-            's_map': s_map_marginal,
-            'h_map': h_map_marginal,
-            's_posterior': s_posterior,
-            'h_posterior': h_posterior,
-            'joint_posterior': joint_posterior,
+            's_map': s_map,
+            'h_map': h_map,
+            's_posterior': s_post,
+            'h_posterior': h_post,
+            'joint_posterior': post,
             's_range': s_range,
             'h_range': h_range,
             's_ci': (s_ci_low, s_ci_high),
             'h_ci': (h_ci_low, h_ci_high),
+            'h_global': h_global,
+            'N_het_estimate': N_het_final,
+            'N_hom_estimate': N_hom_final,
         })
     
-    print("\n" + "="*70)
+    # Final verification
+    total_N = sum([r['N_het_estimate'] + r['N_hom_estimate'] for r in results])
+    weighted_h_final = sum([r['N_hom_estimate'] / total_N for r in results]) if total_N > 0 else 0
+    
+    print(f"\n{'='*70}")
+    print(f"Final check: weighted h = {weighted_h_final:.3f} (target >= {h_global:.3f})")
+    print(f"{'='*70}")
+    
     return results
 
 
-def refine_optimal_model_posterior_vec(part, s_resolution=30, h_resolution=20):
+def refine_optimal_model_posterior_vec(part, s_resolution=30, h_resolution=20, 
+                                       constraint_strength=2.0):
     """
-    IMPROVED VERSION: Joint (s, h) inference from temporal dynamics.
+    IMPROVED VERSION: Joint (s, h) inference with soft global constraint.
     """
     
     # Retrieve optimal clonal structure
@@ -534,12 +631,13 @@ def refine_optimal_model_posterior_vec(part, s_resolution=30, h_resolution=20):
     deterministic_size, total_cells, max_total_per_mutation, clonal_map = \
         compute_deterministic_size_mixed(cs, AO, DP, AO.shape[1])
 
-    # Joint (s, h) inference from temporal dynamics
+    # Joint (s, h) inference from temporal dynamics with constraint
     joint_results = infer_sh_jointly_from_dynamics(
         cs, AO, DP, time_points, 
         deterministic_size, total_cells, max_total_per_mutation,
         s_resolution=s_resolution, 
-        h_resolution=h_resolution
+        h_resolution=h_resolution,
+        constraint_strength=constraint_strength
     )
 
     # Extract results
@@ -554,10 +652,11 @@ def refine_optimal_model_posterior_vec(part, s_resolution=30, h_resolution=20):
         'clonal_structure': cs,
         'mutation_structure': [list(part.obs.iloc[cs_idx].index) for cs_idx in cs],
         'joint_inference': joint_results,
-        'posterior': fitness_posterior,  # For compatibility
+        'posterior': fitness_posterior,
         's_range': s_vec,
         'h_vec': h_vec,
-        'h_posterior': h_posterior_list
+        'h_posterior': h_posterior_list,
+        'h_global': joint_results[0]['h_global'] if joint_results else None,
     }
 
     # Append optimal model information to dataset observations
@@ -565,20 +664,34 @@ def refine_optimal_model_posterior_vec(part, s_resolution=30, h_resolution=20):
     fitness_5 = np.zeros(part.shape[0])
     fitness_95 = np.zeros(part.shape[0])
     clonal_index = np.zeros(part.shape[0])
+    h_est = np.zeros(part.shape[0])
+    h_5 = np.zeros(part.shape[0])
+    h_95 = np.zeros(part.shape[0])
+    N_het_est = np.zeros(part.shape[0])
+    N_hom_est = np.zeros(part.shape[0])
 
     for i, c_idx in enumerate(cs):
         result = joint_results[i]
         
-        # Fitness from joint inference
         fitness[c_idx] = result['s_map']
         fitness_5[c_idx] = result['s_ci'][0]
         fitness_95[c_idx] = result['s_ci'][1]
         clonal_index[c_idx] = i
+        h_est[c_idx] = result['h_map']
+        h_5[c_idx] = result['h_ci'][0]
+        h_95[c_idx] = result['h_ci'][1]
+        N_het_est[c_idx] = result['N_het_estimate']
+        N_hom_est[c_idx] = result['N_hom_estimate']
 
     part.obs['fitness'] = fitness
     part.obs['fitness_5'] = fitness_5
     part.obs['fitness_95'] = fitness_95
     part.obs['clonal_index'] = clonal_index
+    part.obs['h'] = h_est
+    part.obs['h_5'] = h_5
+    part.obs['h_95'] = h_95
+    part.obs['N_het_estimate'] = N_het_est
+    part.obs['N_hom_estimate'] = N_hom_est
 
     # Append mutational structure to each mutation
     mut_structure = part.uns['optimal_model']['mutation_structure']
@@ -637,91 +750,75 @@ def compute_model_likelihood(output, cs, s_range):
     return model_probability
 
 
-def compute_invalid_combinations(part, correlation_threshold=0.6):
-    """
-    Find mutation pairs with incompatible VAF trajectories.
-    Uses PAIRWISE VAF correlations, not correlation with time.
-    """
-    from scipy.stats import pearsonr
+def compute_invalid_combinations(part, pearson_distance_threshold=0.7):
+    """Find mutation pairs with very different temporal correlation"""
+    # Compute pearson of each mutation with time
+    correlation_matrix = np.corrcoef(
+        np.vstack([part.X, part.var.time_points]))
+    correlation_vec = correlation_matrix[-1, :-1]
+
+    # Compute distance between pearsonr's
+    distance_matrix = np.abs(correlation_vec - correlation_vec[:, None])
+
+    # Label invalid combinations if pearson correlation is too different
+    not_valid_comb = np.argwhere(distance_matrix > pearson_distance_threshold)
     
-    # part.X is (n_mutations, n_timepoints)
-    # part.layers['AO'] is (n_mutations, n_timepoints)  
-    # part.layers['DP'] is (n_mutations, n_timepoints)
-    # NO TRANSPOSE NEEDED!
+    # Extract unique tuples from list (Order Irrespective)
+    res = []
+    for i in not_valid_comb:
+        if [i[0], i[1]] and [i[1], i[0]] not in res:
+            res.append(i.tolist()) 
     
-    AO = part.layers['AO']  # Already correct shape
-    DP = part.layers['DP']  # Already correct shape
-    VAF = AO / np.maximum(DP, 1)  # (n_mutations, n_timepoints)
-    
-    n_mut = VAF.shape[0]
-    
-    not_valid_comb = []
-    
-    print(f"\nComputing pairwise VAF correlations (threshold={correlation_threshold}):")
-    
-    for i in range(n_mut):
-        for j in range(i+1, n_mut):
-            # Compute pairwise correlation between VAF trajectories
-            corr, pval = pearsonr(VAF[i], VAF[j])
-            
-            # If correlation is LOW or NEGATIVE, they shouldn't be in same clone
-            if corr < correlation_threshold:
-                not_valid_comb.append([i, j])
-                mut1 = part.obs.index[i][:20] if len(part.obs.index[i]) > 20 else part.obs.index[i]
-                mut2 = part.obs.index[j][:20] if len(part.obs.index[j]) > 20 else part.obs.index[j]
-                print(f"  Invalid: {mut1} ↔ {mut2} (r={corr:.3f})")
-    
-    part.uns['invalid_combinations'] = not_valid_comb
-    print(f"\nFound {len(not_valid_comb)} invalid mutation pairs")
+    part.uns['invalid_combinations'] = res
 
 
-def find_valid_clonal_structures(part, correlation_threshold=0.6, filter_invalid=True):
+def find_valid_clonal_structures(part, p_distance_threshold=1, filter_invalid=True):
     """
-    Find all valid clonal structures using pairwise VAF correlation analysis.
-    
-    Parameters:
-    -----------
-    correlation_threshold : float
-        Minimum correlation required for mutations to be in the same clone
-        Lower = more strict (0.7 is reasonable, 0.5 is very strict)
+    Find all valid clonal structures using pearson correlation analysis
+    and a VAF sum feasibility check (sum of leading mutation VAFs must be ≤ 1
+    at every timepoint, otherwise the structure is biologically impossible).
     """
     
     n_mutations = part.shape[0]
+
+    # AO/DP layers are (n_mutations, n_timepoints); transpose to (n_tps, n_muts)
+    AO = part.layers['AO'].T
+    DP = part.layers['DP'].T
+    vaf_ratio = AO / np.maximum(DP, 1.0)  # (n_tps, n_muts)
 
     if n_mutations == 1:
         valid_cs = [[[0]]]
         return valid_cs
 
-    if filter_invalid:
-        # Compute invalid clonal structures using pairwise correlation
-        compute_invalid_combinations(part, correlation_threshold=correlation_threshold)
-        
-    # Create list of all possible clonal structures
-    a = list(partition(list(range(n_mutations))))
-    cs_list = [cs for cs in a]
-
-    if not filter_invalid:
-        return cs_list
-    
-    # Find all valid clonal structures
-    valid_cs = []
-
-    for cs in cs_list:
-        invalid_combinations_in_cs = 0
-        for clone in cs:
-            # Compute all pairs of mutations inside clone
-            mut_comb = list(combinations(clone, 2))
-            # Check if any pair is invalid
-            n_invalid_comb_in_clone = len(
-                [comb for comb in mut_comb 
-                    if list(comb) in part.uns['invalid_combinations']])
-            invalid_combinations_in_cs += n_invalid_comb_in_clone
-
-        # Append valid clonal structure
-        if invalid_combinations_in_cs == 0:
-            valid_cs.append(cs)
+    else:
+        if filter_invalid is True:
+            compute_invalid_combinations(part, pearson_distance_threshold=p_distance_threshold)
             
-    return valid_cs
+        a = list(partition(list(range(n_mutations))))
+        cs_list = [cs for cs in a]
+
+        if filter_invalid is False:
+            return cs_list
+        
+        else:
+            valid_cs = []
+
+            for cs in cs_list:
+                # ── existing correlation filter ────────────────────────────
+                invalid_combinations_in_cs = 0
+                for clone in cs:
+                    mut_comb = list(combinations(clone, 2))
+                    n_invalid_comb_in_clone = len(
+                        [comb for comb in mut_comb 
+                            if list(comb) in part.uns['invalid_combinations']])
+                    invalid_combinations_in_cs += n_invalid_comb_in_clone
+
+                if invalid_combinations_in_cs > 0:
+                    continue
+
+                valid_cs.append(cs)
+                    
+            return valid_cs
 
 
 def plot_optimal_model(part):

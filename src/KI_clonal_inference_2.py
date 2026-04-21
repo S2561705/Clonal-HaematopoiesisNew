@@ -12,7 +12,6 @@ import jax.random as jrnd
 from itertools import combinations
 from scipy.stats import binom  # For h inference
 
-
 key = jrnd.PRNGKey(758493)  # Random seed is explicit in JAX
 
 #region FIXED: Non vectorised functions with DEBUG
@@ -778,5 +777,309 @@ def plot_optimal_model(part):
         sns.lineplot(x=s_range,
                     y=output[:, i] / norm_max[i],
                     label=p_key_str)
+        
 
 #endregion
+
+def run_sweep_E_B_grid(
+    *,
+    out_dir: Path,
+    E_values: list[float],
+    B_values: list[float],
+    s_true: float,
+    x0_true: float,
+    reps: int,
+    cfg: SimConfig,
+    s_upper: float = 1.0,
+    map_starts: int = 6,
+    progress_every: int = 50,
+):
+    """Sweep over all (E, B) combinations at fixed true fitness."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    rows: list[dict] = []
+    total = int(reps) * len(B_values) * len(E_values)
+    run_i = 0
+    base_seed = int(cfg.seed)
+
+    for E in E_values:
+        for B in B_values:
+            for r in range(int(reps)):
+                run_i += 1
+                cfg_r = SimConfig(**{**asdict(cfg), "seed": base_seed + run_i})
+
+                if progress_every and (run_i % int(progress_every) == 0):
+                    print(f"[sweep] {run_i}/{total} E={E:g} B={B:g} s={s_true:g}", flush=True)
+
+                try:
+                    t, vaf, dp, ao = generate_synth_new(
+                        fitness=s_true, x0=x0_true, E=E, B=B, cfg=cfg_r
+                    )
+                except Exception as e:
+                    rows.append({
+                        "E": float(E),
+                        "B": float(B),
+                        "fitness_true": float(s_true),
+                        "x0_true": float(x0_true),
+                        "rep": int(r),
+                        "n_points": 0,
+                        "status": f"sim_failed:{type(e).__name__}",
+                        "fitness_map": np.nan,
+                        "err": np.nan,
+                    })
+                    continue
+
+                masked = apply_threshold_and_window(t, vaf, dp, ao, cfg_r)
+                if masked is None:
+                    rows.append({
+                        "E": float(E),
+                        "B": float(B),
+                        "fitness_true": float(s_true),
+                        "x0_true": float(x0_true),
+                        "rep": int(r),
+                        "n_points": 0,
+                        "status": "skipped_threshold/window",
+                        "fitness_map": np.nan,
+                        "err": np.nan,
+                    })
+                    continue
+
+                t2, v2, dp2, ao2 = masked
+
+                try:
+                    s_hat, x0_hat = fit_simple_exponential_map(
+                        t2, dp2, ao2,
+                        K=float(cfg_r.K),
+                        s_upper=float(s_upper),
+                        n_starts=int(map_starts),
+                        seed=int(cfg_r.seed),
+                    )
+                    status = "ok"
+                except Exception as e:
+                    s_hat = np.nan
+                    status = f"fit_failed:{type(e).__name__}"
+
+                err = float(s_hat - s_true) if np.isfinite(s_hat) else np.nan
+                rows.append({
+                    "E": float(E),
+                    "B": float(B),
+                    "fitness_true": float(s_true),
+                    "x0_true": float(x0_true),
+                    "rep": int(r),
+                    "n_points": int(len(t2)),
+                    "status": status,
+                    "fitness_map": float(s_hat) if np.isfinite(s_hat) else np.nan,
+                    "err": err,
+                    "abs_err": float(abs(err)) if np.isfinite(err) else np.nan,
+                })
+
+    csv_path = out_dir / "sweep_results.csv"
+    if rows:
+        with csv_path.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+
+    return rows, csv_path
+
+
+def plot_inference_accuracy_panel(rows: list[dict], out_dir: Path, s_true: float):
+    """
+    Create a multi-panel figure showing inference accuracy vs B for each E.
+    """
+    ok = [r for r in rows if r.get("status") == "ok" and np.isfinite(r.get("fitness_map", np.nan))]
+    if not ok:
+        return None
+
+    E_vals = sorted({r["E"] for r in ok})
+    B_vals = sorted({r["B"] for r in ok}, reverse=True)  # 10, 1, 0.1
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.5), sharey=True)
+
+    for ax, E in zip(axes, E_vals):
+        data = []
+        positions = []
+        for i, B in enumerate(B_vals):
+            vals = np.array([r["fitness_map"] for r in ok if r["E"] == E and r["B"] == B])
+            if vals.size > 0:
+                data.append(vals)
+                positions.append(i)
+
+        if data:
+            bp = ax.boxplot(data, positions=positions, widths=0.6, patch_artist=True)
+            for patch in bp['boxes']:
+                patch.set_facecolor('#4C72B0')
+                patch.set_alpha(0.7)
+
+        ax.axhline(s_true, color='red', linestyle='--', linewidth=2, label=f'True s = {s_true}')
+        ax.set_xticks(range(len(B_vals)))
+        ax.set_xticklabels([f'{B:g}' for B in B_vals])
+        ax.set_xlabel('B')
+        ax.set_title(f'E = {E:.0e}')
+        ax.grid(True, axis='y', alpha=0.3)
+
+    axes[0].set_ylabel('Inferred fitness (MAP)')
+    axes[0].legend(loc='upper right')
+
+    fig.suptitle(f'Inference Accuracy: True fitness s = {s_true}', fontsize=12, y=1.02)
+    plt.tight_layout()
+
+    out_path = out_dir / "fig_inference_accuracy_panel.png"
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    return out_path
+
+
+def plot_bias_and_rmse_vs_B(rows: list[dict], out_dir: Path, s_true: float):
+    """
+    Two-panel figure: bias and RMSE vs B, with lines for each E.
+    """
+    ok = [r for r in rows if r.get("status") == "ok" and np.isfinite(r.get("err", np.nan))]
+    if not ok:
+        return None
+
+    E_vals = sorted({r["E"] for r in ok})
+    B_vals = sorted({r["B"] for r in ok})
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
+
+    for E, color in zip(E_vals, colors):
+        biases = []
+        rmses = []
+        for B in B_vals:
+            errs = np.array([r["err"] for r in ok if r["E"] == E and r["B"] == B])
+            if errs.size > 0:
+                biases.append(np.mean(errs))
+                rmses.append(np.sqrt(np.mean(errs**2)))
+            else:
+                biases.append(np.nan)
+                rmses.append(np.nan)
+
+        ax1.plot(B_vals, biases, 'o-', color=color, linewidth=2, markersize=8, label=f'E = {E:.0e}')
+        ax2.plot(B_vals, rmses, 's-', color=color, linewidth=2, markersize=8, label=f'E = {E:.0e}')
+
+    ax1.axhline(0, color='black', linestyle='-', linewidth=1)
+    ax1.set_xscale('log')
+    ax1.set_xlabel('B')
+    ax1.set_ylabel('Bias (MAP − true)')
+    ax1.set_title('Bias vs B')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    ax2.set_xscale('log')
+    ax2.set_xlabel('B')
+    ax2.set_ylabel('RMSE')
+    ax2.set_title('RMSE vs B')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out_path = out_dir / "fig_bias_rmse_vs_B.png"
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    return out_path
+
+
+def plot_heatmap_accuracy(rows: list[dict], out_dir: Path, abs_tol: float = 0.02):
+    """
+    Heatmap showing fraction of runs within tolerance for each (E, B) cell.
+    """
+    ok = [r for r in rows if r.get("status") == "ok" and np.isfinite(r.get("err", np.nan))]
+    if not ok:
+        return None
+
+    E_vals = sorted({r["E"] for r in ok})
+    B_vals = sorted({r["B"] for r in ok}, reverse=True)
+
+    frac = np.full((len(E_vals), len(B_vals)), np.nan)
+    rmse = np.full((len(E_vals), len(B_vals)), np.nan)
+
+    for i, E in enumerate(E_vals):
+        for j, B in enumerate(B_vals):
+            errs = np.array([r["err"] for r in ok if r["E"] == E and r["B"] == B])
+            if errs.size > 0:
+                frac[i, j] = np.mean(np.abs(errs) <= abs_tol)
+                rmse[i, j] = np.sqrt(np.mean(errs**2))
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4))
+
+    im1 = ax1.imshow(frac, cmap='RdYlGn', vmin=0, vmax=1, aspect='auto')
+    ax1.set_xticks(range(len(B_vals)))
+    ax1.set_xticklabels([f'{B:g}' for B in B_vals])
+    ax1.set_yticks(range(len(E_vals)))
+    ax1.set_yticklabels([f'{E:.0e}' for E in E_vals])
+    ax1.set_xlabel('B')
+    ax1.set_ylabel('E')
+    ax1.set_title(f'Fraction |error| ≤ {abs_tol}')
+    for i in range(len(E_vals)):
+        for j in range(len(B_vals)):
+            if np.isfinite(frac[i, j]):
+                ax1.text(j, i, f'{frac[i,j]:.2f}', ha='center', va='center', fontsize=11)
+    plt.colorbar(im1, ax=ax1, label='Fraction')
+
+    im2 = ax2.imshow(rmse, cmap='viridis_r', aspect='auto')
+    ax2.set_xticks(range(len(B_vals)))
+    ax2.set_xticklabels([f'{B:g}' for B in B_vals])
+    ax2.set_yticks(range(len(E_vals)))
+    ax2.set_yticklabels([f'{E:.0e}' for E in E_vals])
+    ax2.set_xlabel('B')
+    ax2.set_ylabel('E')
+    ax2.set_title('RMSE')
+    for i in range(len(E_vals)):
+        for j in range(len(B_vals)):
+            if np.isfinite(rmse[i, j]):
+                ax2.text(j, i, f'{rmse[i,j]:.3f}', ha='center', va='center', fontsize=10, color='white')
+    plt.colorbar(im2, ax=ax2, label='RMSE')
+
+    plt.tight_layout()
+    out_path = out_dir / "fig_accuracy_heatmap_E_B.png"
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    return out_path
+
+
+# --- Run the sweep ---
+if __name__ == "__main__":
+    # Configuration
+    S_TRUE = 0.1  # Fixed true fitness
+    X0_TRUE = 1.0
+    E_VALUES = [2e5, 5e5, 1e6]
+    B_VALUES = [10.0, 1.0, 0.1]
+    REPS = 50  # Increase for smoother results
+
+    cfg = SimConfig(
+        K=1e5,
+        t_end=200.0,
+        t_points=2000,
+        dp_mean=5000.0,
+        dp_sd=2000.0,
+        dp_min=100,
+        sample_every=60,
+        vaf_threshold=0.05,
+        followup_window=80.0,
+        seed=42,
+    )
+
+    out_dir = Path("exports/sweep_E_B")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print("Running E × B sweep...")
+    rows, csv_path = run_sweep_E_B_grid(
+        out_dir=out_dir,
+        E_values=E_VALUES,
+        B_values=B_VALUES,
+        s_true=S_TRUE,
+        x0_true=X0_TRUE,
+        reps=REPS,
+        cfg=cfg,
+        progress_every=25,
+    )
+
+    print("Generating plots...")
+    plot_inference_accuracy_panel(rows, out_dir, S_TRUE)
+    plot_bias_and_rmse_vs_B(rows, out_dir, S_TRUE)
+    plot_heatmap_accuracy(rows, out_dir, abs_tol=0.02)
+
+    print(f"Done. Results in {out_dir}")

@@ -28,9 +28,9 @@ for adata in mds_participant_list:
         plt.plot(timepoints, vaf, marker='o', label=mut)
         plt.fill_between(timepoints, vaf - se, vaf + se, alpha=0.3)
 
-    plt.xlabel('Timepoint')
-    plt.ylabel('VAF')
-    plt.title(f'Participant {participant_id}: VAF of Mutations Over Time')
+    plt.xlabel('Time (years)')
+    plt.ylabel('VAF (%)')
+    plt.title('VAF of Mutations Over Time')
     plt.ylim(0, 1)
     plt.legend(loc='best', fontsize='small')
     plt.tight_layout()
