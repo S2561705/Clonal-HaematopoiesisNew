@@ -117,6 +117,58 @@ def _get_arrays(part):
             jnp.array(carry_idx), jnp.array(time_points), h_fixed)
 
 
+# ---------------------------------------------------------------------------
+# Obligate-heterozygous gene handling
+# ---------------------------------------------------------------------------
+# Some genes are known never to present as biallelic/homozygous in this
+# context. For these, zygosity shouldn't be inferred -- it should be FIXED
+# at h=0 before any inference, exactly like a user-supplied h_fixed value.
+#
+# Fitness/zygosity of OTHER mutations in the same participant is already
+# informed automatically once a clone is pinned: total_cells is solved
+# JOINTLY across every clone in compute_deterministic_size, so pinning one
+# clone's h changes the shared wild-type pool every other clone's
+# likelihood is computed against. No separate propagation code is needed
+# for that part.
+#
+# What's NOT automatic is the clonal-structure SEARCH knowing about the
+# pin -- that's handled via compute_invalid_combinations below, which now
+# also excludes any candidate clone that would cluster two mutations with
+# mutually incompatible h_fixed values (instead of letting such a
+# structure through and crashing later on build_clone_h_grids' consistency
+# assert).
+# ---------------------------------------------------------------------------
+
+def flag_obligate_heterozygous(part, gene_set, gene_col='GENE'):
+    """Set h_fixed = 0.0 for mutations in obligate-heterozygous genes.
+    Call once per participant, BEFORE compute_clonal_models_prob_vec, so
+    the pin informs the structure search itself (via compute_invalid_
+    combinations below), not just the final fitness/zygosity refinement.
+
+    Warns rather than silently overwriting if a mutation already has a
+    conflicting h_fixed value -- that's a data inconsistency worth seeing,
+    not hiding.
+    """
+    if gene_col not in part.obs.columns:
+        return part
+    if 'h_fixed' not in part.obs.columns:
+        part.obs['h_fixed'] = np.nan
+    if 'h_fixed_reason' not in part.obs.columns:
+        part.obs['h_fixed_reason'] = None
+
+    is_obligate = part.obs[gene_col].isin(gene_set)
+    conflict = is_obligate & part.obs['h_fixed'].notna() & (part.obs['h_fixed'] != 0.0)
+    if conflict.any():
+        bad = part.obs.loc[conflict, gene_col].tolist()
+        print(f"  [warn] {part.uns.get('participant_id', '?')}: obligate-het "
+              f"genes with conflicting pre-set h_fixed, NOT overwritten: {bad}")
+
+    to_set = is_obligate & part.obs['h_fixed'].isna()
+    part.obs.loc[to_set, 'h_fixed'] = 0.0
+    part.obs.loc[to_set, 'h_fixed_reason'] = 'obligate_heterozygous_gene'
+    return part
+
+
 def compute_deterministic_size(cs, AO, DP, n_mutations, h, observed=None):
     AO = np.array(AO)
     DP = np.array(DP)
@@ -583,6 +635,16 @@ def refine_optimal_model_posterior_vec(part, s_resolution=40, h_resolution=6,
 # estimate), not a full marginal integrating over their uncertainty too. For
 # 1-2 clones, prefer refine_optimal_model_posterior_vec (exact); reach for
 # this once the joint grid stops being affordable.
+#
+# IMPORTANT (found empirically): the profile posterior can be MATERIALLY
+# narrower than the true joint marginal, not just a coarser version of it --
+# coordinate ascent's greedy, one-clone-at-a-time exploration can miss
+# regions of real joint mass where several clones are simultaneously away
+# from their individual optimum together. Do not substitute this for the
+# full-joint method as a "smoothing" shortcut; verified on MDS711P64 that it
+# can collapse a broad, genuinely-supported marginal into an artificially
+# narrow spike for at least one clone. Prefer pushing full-joint h_resolution
+# higher (memory/compute permitting) over switching methods for readability.
 # ---------------------------------------------------------------------------
 
 def _eval_h_vec(cs, AO, DP, time_points, observed, carry_idx, s_vec, h_vec,
@@ -655,7 +717,8 @@ def refine_optimal_model_posterior_coordinate(part, s_resolution=40, h_resolutio
     """Multi-clone-friendly alternative to refine_optimal_model_posterior_vec.
     Cost ~ n_cycles * n_clones * h_resolution (+ one more such pass for the
     posterior sweep), instead of h_resolution ** n_clones. See module notes
-    above for the profile-posterior caveat."""
+    above for the profile-posterior caveat -- confirmed empirically to be
+    more than cosmetic in at least one case."""
     cs = list(part.uns['model_dict'].values())[0][0]
     AO, DP, observed, carry_idx, time_points, h_fixed = _get_arrays(part)
     s_vec = jnp.linspace(min_s, max_s, s_resolution)
@@ -761,8 +824,11 @@ def refine_optimal_model_posterior_coordinate(part, s_resolution=40, h_resolutio
 
 
 def compute_invalid_combinations(part, pearson_distance_threshold=0.5):
-    """Flag mutation pairs whose VAF-vs-time correlations differ too much
-       (unlikely to share a clone). Uses gap-filled VAF so NaNs don't poison corr."""
+    """Flag mutation pairs that shouldn't share a clone -- either because
+    their VAF-vs-time correlations differ too much (existing check), OR
+    because they have mutually incompatible fixed zygosity (prevents the
+    structure search from ever proposing a clone that would later crash
+    build_clone_h_grids' consistency assert)."""
     DP = np.array(part.layers['DP'])              # (n_mut, n_tp)
     AO = np.array(part.layers['AO'])
     observed = DP > 0
@@ -780,6 +846,18 @@ def compute_invalid_combinations(part, pearson_distance_threshold=0.5):
         pair = sorted([int(i), int(j)])
         if pair not in res:
             res.append(pair)
+
+    if 'h_fixed' in part.obs.columns:
+        h_fixed = np.array(part.obs['h_fixed'].values, dtype=float)
+        n = len(h_fixed)
+        for i in range(n):
+            for j in range(i + 1, n):
+                hi, hj = h_fixed[i], h_fixed[j]
+                if not (np.isnan(hi) or np.isnan(hj)) and not np.isclose(hi, hj):
+                    pair = sorted([i, j])
+                    if pair not in res:
+                        res.append(pair)
+
     part.uns['invalid_combinations'] = res
 
 
